@@ -1,5 +1,11 @@
-#+title: wime
+#+title: nova-rime
 #+options: toc:nil num:nil
+
+nova-rime 是 [[https://github.com/0WD0/wime][wime]] 的硬分叉，独立开发，不计划合回上游。
+目前相对 wime 的改动是新增树状候选（=wime-candidate-style= 设为 =tree=，见下文）。
+Emacs 包名和符号前缀暂时仍是 =wime=。许可证与上游相同，为 GPL-3.0。
+
+以下内容沿用 wime 的说明。
 
 wime 是纯 Elisp 的中文双拼输入法。
 
@@ -17,7 +23,7 @@ wime 是纯 Elisp 的中文双拼输入法。
 =(sqlite-available-p)= 应返回非 nil。
 
 #+begin_src sh
-git clone https://github.com/0WD0/wime
+git clone https://github.com/yibie/nova-rime
 #+end_src
 
 用 [[https://docs.astral.sh/uv/][uv]] 下载自己方案的词库：
@@ -91,6 +97,11 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 =wime-candidate-style= 为 =spans= 时不显示双拼串，
 模型拿不准的字加波浪线，替代写法竖排在下方，整段统一编号。
 按数字固定那一段，其余部分重新解码。
+
+=wime-candidate-style= 为 =tree= 时，最优读法切成词块并用线串起来，备选竖排在每块下面。
+按数字只固定那一块，其余部分重新解码，=TAB= 切到整句列表。
+它不需要神经模型，词块来自词库的词边界和各候选的差异。
+差异跨过词块边界的读法不进树，只能在整句列表里选。
 
 * 神经解码
 

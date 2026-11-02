@@ -357,9 +357,11 @@ its model files are unavailable, the lattice converts."
 `list' numbers whole sentences.  `spans' shows the best reading once,
 marks characters a reranker is unsure of, and numbers alternatives for
 those spans only; a digit fixes that span and the rest is decoded again.
+`tree' splits the best reading into word chips with alternatives below
+each chip, a digit working as in `spans'; it needs no reranker.
 \\<wime-active-mode-map>\\[wime-toggle-candidate-list] switches one
 composition back to the sentence list."
-  :type '(choice (const list) (const spans)) :group 'wime)
+  :type '(choice (const list) (const spans) (const tree)) :group 'wime)
 
 (defcustom wime-confidence-threshold 0.9
   "Characters with a lower estimated probability are marked uncertain."
@@ -960,7 +962,7 @@ Set `wime--span-choices' to the labeled alternatives, in label order."
 
 (defun wime--spans-p ()
   "Whether the current composition renders as one marked reading."
-  (and (eq wime-candidate-style 'spans) (not wime--list-view)
+  (and (memq wime-candidate-style '(spans tree)) (not wime--list-view)
        wime--candidate-records
        (> (wime-candidate-end (car wime--candidate-records)) 1)
        (= (wime-candidate-end (car wime--candidate-records))

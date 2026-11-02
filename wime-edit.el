@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'wime)
+(require 'wime-tree)
 
 (declare-function evil-normal-state "evil-states" (&optional arg))
 
@@ -614,7 +615,9 @@ fonts use the same units as the source-text alignment."
       (overlay-put wime-edit--decoration 'help-echo
                    "空格确认，ESC 暂存；TAB 切换整句候选")
       (wime-edit--refresh-pending-decorations)
-      (wime-edit--show-corrections text))))
+      (if (and (eq wime-candidate-style 'tree) (wime--spans-p))
+          (wime-tree--show text)
+        (wime-edit--show-corrections text)))))
 
 (defun wime-edit--refresh (units cursor)
   "Update reading UNITS and place point at the syllable boundary CURSOR."
