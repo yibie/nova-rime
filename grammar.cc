@@ -1,7 +1,7 @@
-/* wime grammar module: expose the rime-octagram collocation score to Elisp.
+/* nova-rime grammar module: expose the rime-octagram collocation score to Elisp.
 
    This wraps only the language model, not the Rime input engine.  The module
-   is loaded by wime.el and queried during sentence scoring. */
+   is loaded by nova-rime.el and queried during sentence scoring. */
 
 #include <emacs-module.h>
 
@@ -41,9 +41,9 @@ static emacs_value Fopen(emacs_env *env, ptrdiff_t nargs, emacs_value *args,
     }
     RIME_STRUCT(RimeTraits, traits);
     traits.shared_data_dir = shared_data_dir.c_str();
-    traits.app_name = "rime.wime";
+    traits.app_name = "rime.nova-rime";
     traits.distribution_name = "Rime";
-    traits.distribution_code_name = "wime-grammar";
+    traits.distribution_code_name = "nova-rime-grammar";
     traits.distribution_version = "1.0";
     api->setup(&traits);
     api->initialize(&traits);
@@ -86,8 +86,8 @@ int emacs_module_init(struct emacs_runtime *runtime) {
     return 1;
   }
   emacs_env *env = runtime->get_environment(runtime);
-  defun(env, Fopen, "wime-grammar-open", 2, 2);
-  defun(env, Fquery, "wime-grammar-query", 3, 3);
-  defun(env, Floaded, "wime-grammar-loaded-p", 0, 0);
+  defun(env, Fopen, "nova-rime-grammar-open", 2, 2);
+  defun(env, Fquery, "nova-rime-grammar-query", 3, 3);
+  defun(env, Floaded, "nova-rime-grammar-loaded-p", 0, 0);
   return 0;
 }

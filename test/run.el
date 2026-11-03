@@ -5,16 +5,16 @@
 (require 'ert)
 
 (unless (sqlite-available-p)
-  (error "Wime tests require Emacs built with SQLite support"))
+  (error "Nova-rime tests require Emacs built with SQLite support"))
 
 (let* ((directory (file-name-directory (or load-file-name buffer-file-name)))
        (package-directory (expand-file-name ".." directory)))
   (add-to-list 'load-path package-directory)
-  (setq wime-user-database nil
-        wime-grammar-module nil
+  (setq nova-rime-user-database nil
+        nova-rime-grammar-module nil
         native-comp-enable-subr-trampolines nil)
-  (dolist (file '("wime-test.el" "wime-edit-test.el" "wime-tree-test.el" "wime-abbreviate-test.el"
-                  "wime-memory-test.el" "schemes-test.el"))
+  (dolist (file '("nova-rime-test.el" "nova-rime-edit-test.el" "nova-rime-tree-test.el" "nova-rime-abbreviate-test.el"
+                  "nova-rime-memory-test.el" "schemes-test.el"))
     (load (expand-file-name file directory) nil t)))
 
 (ert-run-tests-batch-and-exit)

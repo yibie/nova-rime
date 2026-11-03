@@ -29,16 +29,16 @@ cc_binary(
 )
 
 
-exports_files(["gen/wime_gen.py", "gen/context-pinyin.json"])
+exports_files(["gen/nova_rime_gen.py", "gen/context-pinyin.json"])
 
 py_binary(
     name = "generator",
-    srcs = ["gen/wime_gen.py"],
+    srcs = ["gen/nova_rime_gen.py"],
     data = [
         "schemes/mspy.json",
         "gen/context-pinyin.json",
     ],
-    main = "gen/wime_gen.py",
+    main = "gen/nova_rime_gen.py",
 )
 
 genrule(

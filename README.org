@@ -1,14 +1,14 @@
 #+title: nova-rime
 #+options: toc:nil num:nil
 
-nova-rime 是 [[https://github.com/0WD0/wime][wime]] 的硬分叉，独立开发，不计划合回上游。
-相对 wime 的改动：树状候选与整句改错（=wime-tree.el=）、输入中保留原始字母（=wime-raw.el=），
-见下文“树状候选”和“原始字母输入”。默认都不开，行为和上游一致。
-Emacs 包名和符号前缀仍是 =wime=。许可证与上游相同，为 GPL-3.0。
+nova-rime 从 [[https://github.com/0WD0/wime][wime]] 硬分叉而来，独立开发，不计划合回上游。许可证与上游相同，为 GPL-3.0。
 
-以下内容沿用 wime 的说明。
+相对 wime：
+- 加了树状候选与整句改错（=nova-rime-tree.el=）、输入中保留原始字母（=nova-rime-raw.el=），见下文。
+- 去掉了神经解码、分段视图和日文输入法，只用词库的词格搜索。
+- 包名、文件名、符号前缀、输入法名和数据目录都改成了 =nova-rime=。
 
-wime 是纯 Elisp 的中文双拼输入法。
+nova-rime 是纯 Elisp 的中文双拼输入法。
 
 - 支持微软、小鹤、搜狗、自然码双拼，大写字母输入墨奇辅助码，
   =C-1= … =C-5= 输入声调。
@@ -28,7 +28,7 @@ git clone https://github.com/yibie/nova-rime
 用 [[https://docs.astral.sh/uv/][uv]] 下载自己方案的词库：
 
 #+begin_src sh
-D="${XDG_DATA_HOME:-$HOME/.local/share}/wime"
+D="${XDG_DATA_HOME:-$HOME/.local/share}/nova-rime"
 uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
     --repo-type dataset --local-dir "$D"
 #+end_src
@@ -43,19 +43,19 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 在 init 文件中加入：
 
 #+begin_src emacs-lisp
-(add-to-list 'load-path "/path/to/wime")
-(require 'wime)
-(setq wime-raw-input t
-      wime-candidate-style 'tree)
+(add-to-list 'load-path "/path/to/nova-rime")
+(require 'nova-rime)
+(setq nova-rime-raw-input t
+      nova-rime-candidate-style 'tree)
 ;; 不是微软双拼时：
-;; (setq wime-database-file (expand-file-name "wanxiang-flypy.db" wime-data-directory))
-(global-set-key (kbd "C-\\") #'wime-toggle-english)
-(wime-setup)
+;; (setq nova-rime-database-file (expand-file-name "wanxiang-flypy.db" nova-rime-data-directory))
+(global-set-key (kbd "C-\\") #'nova-rime-toggle-english)
+(nova-rime-setup)
 #+end_src
 
 =C-\\= 启用中文输入；中文输入时再按切到英文，原样输入字母，
 =C-u C-\\= 关闭输入法。
-=wime-data-directory= 默认是 =~/.local/share/wime/=
+=nova-rime-data-directory= 默认是 =~/.local/share/nova-rime/=
 （设置了 =XDG_DATA_HOME= 时在它下面）。
 
 * 使用
@@ -75,15 +75,15 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 
 声调只保留带这个调的字；词里的变调不影响筛选，打字典里的本调即可。
 方案用到 =;,./= 时，它们只在编码位置算键，别处仍是标点。
-标点默认全角，=M-x wime-toggle-punctuation= 切换半角。
+标点默认全角，=M-x nova-rime-toggle-punctuation= 切换半角。
 
 ** 半上屏
 
-=wime-editable-preedit= 打开时，待上屏的中文就是 buffer 里的文字，
+=nova-rime-editable-preedit= 打开时，待上屏的中文就是 buffer 里的文字，
 读音作为属性保存，不写进文件。
 
 - 光标可以移回去，在字后补大写辅助码，或删改其中的字。
-- 继续输入时，最近 =wime-edit-max-syllables= （默认 24）个字一起重新转换，
+- 继续输入时，最近 =nova-rime-edit-max-syllables= （默认 24）个字一起重新转换，
   后打的音节可以改变前面的选字。
 - 中间敲的标点，以及切到英文后打的字母、数字和空格，都成为这句的一部分，
   前后的中文一起转换。
@@ -93,7 +93,7 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 
 ** 树状候选
 
-=wime-candidate-style= 设为 =tree= 时，最优读法切成词块并用线串起来。
+=nova-rime-candidate-style= 设为 =tree= 时，最优读法切成词块并用线串起来。
 
 - 没把握的词（橙色；整句选了词频较低的词时是紫色）直接列出备选，全句连续编号，按数字只改这一个词，其余词不动。
 - 光标停在某个词里时只展开这个词，备选里有不同长度的词，可以重新切分；光标回到句尾恢复全句编号。
@@ -102,31 +102,31 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 - 最后一个音节没打完时，文字和词块保持不动。
 - =TAB= 切到整句列表。
 
-可调的选项（=M-x customize-group RET wime=）：
+可调的选项（=M-x customize-group RET nova-rime=）：
 
 | 选项 | 默认 | 作用 |
 |------+------+------|
-| =wime-tree-freeze= | =t= | 打过去的词冻结 |
-| =wime-tree-overview= | =uncertain= | 没有焦点时哪些词列备选：=uncertain=、=all= 或 =nil= |
-| =wime-tree-show-keys= | =inline= | 半上屏时按键显示在原位（=inline=）、上方（=above=）或不显示 |
-| =wime-tree-confident-share= | 80 | 占比低于它算没把握 |
-| =wime-tree-freeze-share= | 50 | 多字词占比达到它就冻结 |
-| =wime-tree-stable-syllables= | 2 | 之后又打了这么多音节都没变就冻结 |
-| =wime-tree-overview-alts= | 2 | 没有焦点时每个词列几个备选 |
-| =wime-tree-focus-alts= | 6 | 焦点词每页几个备选 |
-| =wime-tree-focus-pages= | 6 | 焦点词的备选最多几页 |
-| =wime-tree-char-alts= | 4 | 光标在多字词里时先列几个单字，0 不列 |
-| =wime-tree-labels= | 9 | 全句最多几个编号 |
+| =nova-rime-tree-freeze= | =t= | 打过去的词冻结 |
+| =nova-rime-tree-overview= | =uncertain= | 没有焦点时哪些词列备选：=uncertain=、=all= 或 =nil= |
+| =nova-rime-tree-show-keys= | =inline= | 半上屏时按键显示在原位（=inline=）、上方（=above=）或不显示 |
+| =nova-rime-tree-confident-share= | 80 | 占比低于它算没把握 |
+| =nova-rime-tree-freeze-share= | 50 | 多字词占比达到它就冻结 |
+| =nova-rime-tree-stable-syllables= | 2 | 之后又打了这么多音节都没变就冻结 |
+| =nova-rime-tree-overview-alts= | 2 | 没有焦点时每个词列几个备选 |
+| =nova-rime-tree-focus-alts= | 6 | 焦点词每页几个备选 |
+| =nova-rime-tree-focus-pages= | 6 | 焦点词的备选最多几页 |
+| =nova-rime-tree-char-alts= | 4 | 光标在多字词里时先列几个单字，0 不列 |
+| =nova-rime-tree-labels= | 9 | 全句最多几个编号 |
 
-词块颜色是 =wime-tree-*-face=，可以用 =M-x customize-face= 改。
+词块颜色是 =nova-rime-tree-*-face=，可以用 =M-x customize-face= 改。
 
 ** 原始字母输入
 
-=wime-raw-input= 设为非 nil 后，输入中 buffer 里放的就是敲下的字母，汉字只出现在下面的词块里。
+=nova-rime-raw-input= 设为非 nil 后，输入中 buffer 里放的就是敲下的字母，汉字只出现在下面的词块里。
 字母是普通文字，光标可以停在任意字母前后用普通命令修改，每次修改后整串重新解码；
-字母按对应词块的颜色画下划线（=wime-raw-color-letters=），光标所在的词块高亮。
+字母按对应词块的颜色画下划线（=nova-rime-raw-color-letters=），光标所在的词块高亮。
 
-- 空格：整串换成汉字，最后半个音节留下继续输入（开着 =wime-abbreviate= 时最后一个声母也出字）。
+- 空格：整串换成汉字，最后半个音节留下继续输入（开着 =nova-rime-abbreviate= 时最后一个声母也出字）。
 - 回车：字母原样留下。
 - =ESC=：字母原样留下。
 - 数字：和树状候选一样改词；=TAB= 切到整句列表。
@@ -139,9 +139,9 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 
 ** 简拼
 
-=wime-abbreviate= 设为非 nil 后，任何位置的音节都可以只打声母：=tauovgewfti= 是“他说这个问题”，其中“这”只打了 =v=、“题”只打了 =t=；=wxhn= 是“我喜欢你”。
-每个字母既可能单独是一个声母，也可能和下一个字母组成完整音节，=wime--parse= 按词频选出得分最高的切法，每个只打声母的音节扣 =wime-abbreviation-penalty=（默认 4），所以完整音节能拼出词时优先按完整音节切。
-只在原始字母输入下生效；半上屏按两个键一组定位文字，开着 =wime-edit-mode= 时仍然两两配对。
+=nova-rime-abbreviate= 设为非 nil 后，任何位置的音节都可以只打声母：=tauovgewfti= 是“他说这个问题”，其中“这”只打了 =v=、“题”只打了 =t=；=wxhn= 是“我喜欢你”。
+每个字母既可能单独是一个声母，也可能和下一个字母组成完整音节，=nova-rime--parse= 按词频选出得分最高的切法，每个只打声母的音节扣 =nova-rime-abbreviation-penalty=（默认 4），所以完整音节能拼出词时优先按完整音节切。
+只在原始字母输入下生效；半上屏按两个键一组定位文字，开着 =nova-rime-edit-mode= 时仍然两两配对。
 
 第一次用时会给词库建一个按声母查询的索引（万象全量词库约 1 秒、30MB），没有它的话 =w?x?h?= 这类查询要扫一遍所有 w 开头的词。
 在 100 句自然码测试句上，开启后完整输入的准确率不变（整句全对 31/100，逐字 84.9%）；最后一个字只打声母时整句全对从 0 提到 24/100。
@@ -149,7 +149,7 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 
 * 工作方式
 
-打字时，wime 在词库上做词格搜索：
+打字时，nova-rime 在词库上做词格搜索：
 按双拼码查词，按词频、每词罚项和可选的 octagram 搭配分打分，
 辅助码和声调是硬约束。追加、退格时复用仍然有效的前缀。
 
@@ -158,30 +158,30 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 两者都默认关闭。
 
 #+begin_src emacs-lisp
-(setq wime-user-database (expand-file-name "user.sqlite3" wime-data-directory))
+(setq nova-rime-user-database (expand-file-name "user.sqlite3" nova-rime-data-directory))
 #+end_src
 
-设置后，每次上屏在本地记录按键、文字、wime 最初给的读音
+设置后，每次上屏在本地记录按键、文字、nova-rime 最初给的读音
 和最多 64 字的光标前文，可用来检查输入法的实际表现。
 
-再设 =(setq wime-learn t)=，与首选不同的上屏会被记成学到的读音：
+再设 =(setq nova-rime-learn t)=，与首选不同的上屏会被记成学到的读音：
 不同的片段扩展到同键下最短的词典词（至少两字），
 以后同样的按键优先给出它；同键上屏了别的读音就忘掉。
 学到的读音在上下文需要别的词时也会胜出，所以默认不启用。
 
-=M-x wime-history= 查看上屏记录，=M-x wime-memory= 管理学到的读音，
-=M-x wime-memory-at-point= 查找光标处的学习词语；
+=M-x nova-rime-history= 查看上屏记录，=M-x nova-rime-memory= 管理学到的读音，
+=M-x nova-rime-memory-at-point= 查找光标处的学习词语；
 在这两个 buffer 里按 =C-h m= 查看按键。
 要全部清除，退出 Emacs 后删掉数据库文件。
 
 * 词库与方案
 
 =schemes/*.json= 定义每个方案的声母键、韵母键、零声母和整音节别名。
-=gen/wime_gen.py= 只用 Python 标准库，从万象拼音的 [[https://github.com/amzxyz/rime-wanxiang/releases/tag/dict-nightly][=rime-wanxiang-moqi-fuzhu.zip=]]
+=gen/nova_rime_gen.py= 只用 Python 标准库，从万象拼音的 [[https://github.com/amzxyz/rime-wanxiang/releases/tag/dict-nightly][=rime-wanxiang-moqi-fuzhu.zip=]]
 生成按双拼码索引的 SQLite 词库，保留辅助码和声调：
 
 #+begin_src sh
-python3 gen/wime_gen.py --rime-data /path/to/unzipped \
+python3 gen/nova_rime_gen.py --rime-data /path/to/unzipped \
     --scheme schemes/flypy.json --database wanxiang-flypy.db
 #+end_src
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate wime's SQLite word database using a JSON double-pinyin scheme.
+"""Generate nova-rime's SQLite word database using a JSON double-pinyin scheme.
 
 By default the database uses schemes/mspy.json. ``--scheme`` selects another
 self-contained JSON definition with initial/final keys, zero initials and

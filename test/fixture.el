@@ -4,9 +4,9 @@
 
 (require 'sqlite)
 
-(defun wime-test--fixture ()
+(defun nova-rime-test--fixture ()
   "Create a small word database, removed when this Emacs exits."
-  (let* ((file (make-temp-file "wime-test-" nil ".db"))
+  (let* ((file (make-temp-file "nova-rime-test-" nil ".db"))
          (db (sqlite-open file)))
     (unwind-protect
         (progn
