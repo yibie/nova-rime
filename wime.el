@@ -26,6 +26,8 @@
 (require 'seq)
 (require 'subr-x)
 (require 'sqlite)
+(require 'wime-tree)
+(require 'wime-raw)
 
 (declare-function wime-grammar-open "librime-grammar"
                   (shared-data-dir language))
@@ -114,6 +116,31 @@ A readable database and Emacs SQLite support are required for candidates."
 
 (defcustom wime-database-limit 64
   "Maximum entries fetched from the database for one code."
+  :type 'natnum
+  :group 'wime)
+
+(defcustom wime-abbreviate nil
+  "Non-nil lets any syllable be typed as its initial alone, anywhere.
+A key may then stand alone as an initial or pair with the next key into
+a full syllable, so one input splits several ways: \"wxhn\" is either
+\"wx\" \"hn\" or four initials.  `wime--parse' picks the split whose
+words score best, charging `wime-abbreviation-penalty' per initial.
+When nil, keys always pair up and only a trailing key stays incomplete.
+Half-commit editing (`wime-edit-mode') places characters by key pairs,
+so it keeps pairing; use this with `wime-raw-input'."
+  :type 'boolean
+  :group 'wime)
+
+(defcustom wime-abbreviation-penalty 4.0
+  "Score charged per syllable typed as an initial alone.
+An initial matches every syllable it starts, so its best word usually
+outweighs the exact reading; the charge keeps full syllables preferred
+whenever they spell real words."
+  :type 'number
+  :group 'wime)
+
+(defcustom wime-abbreviation-max-syllables 4
+  "Longest word, in syllables, considered when splitting abbreviated input."
   :type 'natnum
   :group 'wime)
 
@@ -357,8 +384,10 @@ its model files are unavailable, the lattice converts."
 `list' numbers whole sentences.  `spans' shows the best reading once,
 marks characters a reranker is unsure of, and numbers alternatives for
 those spans only; a digit fixes that span and the rest is decoded again.
-`tree' splits the best reading into word chips with alternatives below
-each chip, a digit working as in `spans'; it needs no reranker.
+`tree' splits the best reading into word chips joined by a line.  Words
+the dictionary is unsure of list alternatives with sentence-wide labels;
+with point inside a word only that word lists them.  Words already typed
+past stay fixed while later syllables arrive.  It needs no reranker.
 \\<wime-active-mode-map>\\[wime-toggle-candidate-list] switches one
 composition back to the sentence list."
   :type '(choice (const list) (const spans) (const tree)) :group 'wime)
@@ -497,6 +526,12 @@ Tones 1 to 4 keep only characters with that reading; all reach the model."
 
 (defun wime--parse (input)
   "Split INPUT into a list of (CODE . AUX) syllables.
+With `wime-abbreviate' the split comes from `wime--abbreviated-parse'."
+  (or (and (wime--abbreviating-p) (wime--abbreviated-parse input))
+      (wime--paired-parse input)))
+
+(defun wime--paired-parse (input)
+  "Split INPUT into a list of (CODE . AUX) syllables.
 
 CODE holds one or two lowercase keys (``;'' is a key); a lowercase key
 after a complete syllable starts a new syllable.  AUX collects the
@@ -514,6 +549,106 @@ uppercase keys typed after that syllable, so the typed order is kept."
     (when (or code aux)
       (push (cons (or code "") (or aux "")) units))
     (nreverse units)))
+
+(defvar wime--abbreviation-cache (make-hash-table :test #'equal)
+  "Lookups made by `wime--abbreviated-parse': a GLOB pattern to its
+entries, and (PATTERN) to whether any code starts with it.")
+
+(defvar wime--abbreviation-cache-key nil
+  "Database and limit the cache was filled from; a change clears it.")
+
+(defvar wime--abbreviation-state nil
+  "(KEYS . BEST) of the last `wime--abbreviated-parse', so typing one more
+key only scores the splits ending at it.")
+
+(defun wime--abbreviation-cached (key compute)
+  (let ((source (list wime-database-file wime-database-limit)))
+    (unless (equal source wime--abbreviation-cache-key)
+      (clrhash wime--abbreviation-cache)
+      (setq wime--abbreviation-cache-key source wime--abbreviation-state nil)))
+  (let ((hit (gethash key wime--abbreviation-cache 'none)))
+    (if (eq hit 'none) (puthash key (funcall compute) wime--abbreviation-cache) hit)))
+
+(defun wime--abbreviation-entries (pattern)
+  (wime--abbreviation-cached
+   pattern (lambda () (if (string-search "?" pattern)
+                          (wime--pattern-entries pattern)
+                        (wime--database-entries pattern)))))
+
+(defun wime--abbreviation-alive-p (pattern)
+  "Non-nil when some dictionary code starts with PATTERN."
+  (wime--abbreviation-cached
+   (list pattern)
+   (lambda () (wime--pattern-alive-p pattern))))
+
+(defun wime--abbreviation-splits (keys start end)
+  "Ways to split KEYS from START to END into at most
+`wime-abbreviation-max-syllables' syllables of one or two keys, as
+lists of (CODE . AUX).  A split stops growing once no word starts with it."
+  (let ((limit (min wime-abbreviation-max-syllables wime-max-word-syllables)) result)
+    (cl-labels ((grow (at units pattern count)
+                  (if (= at end)
+                      (push (reverse units) result)
+                    (when (< count limit)
+                      (dolist (size '(1 2))
+                        (when (<= (+ at size) end)
+                          (let* ((part (seq-subseq keys at (+ at size)))
+                                 (code (mapconcat #'car part ""))
+                                 (next (concat pattern code (if (= size 1) "?" ""))))
+                            (when (wime--abbreviation-alive-p next)
+                              (grow (+ at size)
+                                    (cons (cons code (mapconcat #'cdr part "")) units)
+                                    next (1+ count))))))))))
+      (grow start nil "" 0))
+    result))
+
+(defun wime--abbreviated-parse (input)
+  "Split INPUT's keys into syllables, each two keys or an initial alone.
+Every key may start a syllable; a word scores its log weight less
+`wime-word-penalty', and `wime-abbreviation-penalty' per initial alone.
+The best-scoring split wins, so full syllables hold unless initials
+spell a more likely sentence.  Return nil without a database or when
+no split reaches the end."
+  (when (and input (wime--database))
+    (let* ((keys (let (result)
+                   ;; (KEY . AUX): uppercase keys attach to the key before them.
+                   (dolist (key (string-to-list input) (nreverse result))
+                     (cond ((wime--code-char-p key) (push (cons (char-to-string key) "") result))
+                           ((and (wime--aux-char-p key) result)
+                            (setcdr (car result) (concat (cdar result) (char-to-string key))))))))
+           (n (length keys))
+           (old (car wime--abbreviation-state))
+           (old-best (cdr wime--abbreviation-state))
+           ;; best[END] depends only on the keys before END.
+           (common (cl-loop for a in old for b in keys while (equal a b) count t))
+           (best (make-vector (1+ n) nil)))
+      (aset best 0 (cons 0.0 nil))
+      (cl-loop for end from 1 to (min common n) do (aset best end (aref old-best end)))
+      (cl-loop for end from (1+ common) to n do
+               (cl-loop for start from (max 0 (- end (* 2 wime-abbreviation-max-syllables)))
+                        below end
+                        for previous = (aref best start)
+                        when previous do
+                        (dolist (units (wime--abbreviation-splits keys start end))
+                          (let* ((pattern (mapconcat (lambda (unit)
+                                                       (if (= (length (car unit)) 1)
+                                                           (concat (car unit) "?")
+                                                         (car unit)))
+                                                     units ""))
+                                 (entry (car (wime--matching-entries
+                                              (wime--abbreviation-entries pattern) units))))
+                            (when entry
+                              (let ((score (+ (car previous)
+                                              (log (max 1 (or (nth 2 entry) 1)))
+                                              (- wime-word-penalty)
+                                              (- (* wime-abbreviation-penalty
+                                                    (cl-count-if (lambda (unit) (= (length (car unit)) 1))
+                                                                 units))))))
+                                (when (or (null (aref best end)) (> score (car (aref best end))))
+                                  (aset best end (cons score (append (reverse units) (cdr previous)))))))))))
+      (setq wime--abbreviation-state (cons keys best))
+      (when-let* ((found (aref best n)))
+        (reverse (cdr found))))))
 
 (defun wime--next-position ()
   "Return `final' when the next code key completes a syllable, else `initial'."
@@ -744,10 +879,66 @@ for that syllable everywhere."
                 (setq i j))))))
       (when changed (cl-incf wime--memory-tick)))))
 
+(defconst wime--initials-expression
+  (mapconcat (lambda (i) (format "substr(code,%d,1)" i)) '(1 3 5 7 9 11 13 15) "||")
+  "SQL for a code's syllable initials, up to eight syllables.")
+
+(defvar wime--initials-index nil
+  "Database file whose initials index `wime--initials-index-p' checked:
+\\(FILE . READY).")
+
+(defun wime--initials-index-p ()
+  "Non-nil when the database has the index for abbreviated lookups.
+Create it the first time, about a second and 30 MB on the full wanxiang
+list; without it a pattern like \"w?x?h?\" scans every \"w\" code."
+  (unless (equal (car wime--initials-index) wime-database-file)
+    (setq wime--initials-index
+          (cons wime-database-file
+                (condition-case err
+                    (progn
+                      (sqlite-execute (wime--database)
+                                      (format "CREATE INDEX IF NOT EXISTS entry_initials ON entry(%s, weight DESC)"
+                                              wime--initials-expression))
+                      t)
+                  (error (message "wime: no initials index, abbreviations are slow: %s" err)
+                         nil)))))
+  (cdr wime--initials-index))
+
+(defun wime--pattern-initials (pattern)
+  "Initials of PATTERN, whose syllables are two characters each."
+  (cl-loop for i from 0 below (length pattern) by 2 concat (substring pattern i (1+ i))))
+
+(defun wime--pattern-entries (pattern)
+  "Return dictionary entries whose code matches the GLOB PATTERN.
+Each ``?'' in PATTERN is the final of a syllable typed as an initial."
+  (when-let* ((db (wime--database)))
+    (if (wime--initials-index-p)
+        (sqlite-select db (format "SELECT word, aux, weight FROM entry INDEXED BY entry_initials WHERE %s = ? AND code GLOB ? ORDER BY weight DESC LIMIT ?"
+                                  wime--initials-expression)
+                       (list (wime--pattern-initials pattern) pattern wime-database-limit))
+      (sqlite-select db (concat "SELECT word, aux, weight FROM entry WHERE code GLOB ? "
+                                "ORDER BY weight DESC LIMIT ?")
+                     (list pattern wime-database-limit)))))
+
+(defun wime--pattern-alive-p (pattern)
+  "Non-nil when some dictionary code starts with PATTERN."
+  (when-let* ((db (wime--database)))
+    (and (if (and (string-search "?" pattern) (wime--initials-index-p))
+             (let ((initials (wime--pattern-initials pattern)))
+               (sqlite-select db (format "SELECT 1 FROM entry INDEXED BY entry_initials WHERE %1$s >= ? AND %1$s < ? AND code GLOB ? LIMIT 1"
+                                         wime--initials-expression)
+                              (list initials (concat initials "~") (concat pattern "*"))))
+           (sqlite-select db "SELECT 1 FROM entry WHERE code GLOB ? LIMIT 1" (list (concat pattern "*"))))
+         t)))
+
 (defun wime--entries-for (code)
-  "Return the learned and dictionary word entries for CODE."
+  "Return the learned and dictionary word entries for CODE.
+A CODE containing ``?'' comes from `wime--span-code' over initials typed
+alone, and matches every word whose syllables start with them."
   (and code (not (string-empty-p code))
-       (append (wime--memory-entries code) (wime--database-entries code))))
+       (if (string-search "?" code)
+           (wime--pattern-entries code)
+         (append (wime--memory-entries code) (wime--database-entries code)))))
 
 (defun wime--matching-entries (entries units)
   "Return the entries of ENTRIES whose auxiliary codes match UNITS."
@@ -759,9 +950,26 @@ for that syllable everywhere."
   "Return the words for one UNIT that match its auxiliary code."
   (mapcar #'car (wime--matching-entries (wime--entries-for (car unit)) (list unit))))
 
+(defun wime--unit-pattern (unit)
+  "UNIT's code for a dictionary lookup: an initial typed alone gets ``?''."
+  (if (and (wime--abbreviating-p) (= (length (car unit)) 1))
+      (concat (car unit) "?")
+    (car unit)))
+
 (defun wime--span-code (units start end)
-  "Return the concatenated code of UNITS from START to END."
-  (wime--full-code (seq-subseq units start end)))
+  "Return the concatenated code of UNITS from START to END.
+With `wime-abbreviate', an initial typed alone becomes a GLOB pattern."
+  (mapconcat #'wime--unit-pattern (seq-subseq units start end) ""))
+
+(defun wime--abbreviating-p ()
+  "Non-nil when `wime-abbreviate' applies here; see its docstring."
+  (and wime-abbreviate (not (bound-and-true-p wime-edit-mode))))
+
+(defun wime--unit-complete-p (unit)
+  "Non-nil when UNIT can be decoded: a full syllable, or an initial
+typed alone under `wime-abbreviate'."
+  (or (= (length (car unit)) 2)
+      (and (wime--abbreviating-p) (= (length (car unit)) 1))))
 
 (defun wime--best-paths (paths)
   "Deduplicate PATHS by surface, preserving dictionary evidence, then prune."
@@ -860,6 +1068,12 @@ a complete syllable precedes it, longer words are allowed."
 
 (defun wime--candidates (input)
   "Return candidates for the raw INPUT string.
+Words the `tree' style froze join `wime--pins' for the whole-input search."
+  (let ((wime--pins (wime-tree--search-pins input)))
+    (wime--search-candidates input)))
+
+(defun wime--search-candidates (input)
+  "Return candidates for the raw INPUT string.
 
 Complete input, including a single syllable, uses contextual word scores.
 An incomplete trailing syllable falls back to a prefix search, the way
@@ -867,7 +1081,7 @@ Rime completes partial pinyin."
   (setq wime--typed-tones (wime--tones input))
   (let* ((units (wime--parse input))
          (last (car (last units)))
-         (complete (cl-every (lambda (unit) (= (length (car unit)) 2)) units))
+         (complete (and units (cl-every #'wime--unit-complete-p units)))
          (skip (run-hook-with-args-until-success 'wime-lattice-inhibit-functions units)))
     (setq wime--candidate-records
           (when (and units complete (not skip))
@@ -961,12 +1175,14 @@ Set `wime--span-choices' to the labeled alternatives, in label order."
     (apply #'concat (nreverse parts))))
 
 (defun wime--spans-p ()
-  "Whether the current composition renders as one marked reading."
-  (and (memq wime-candidate-style '(spans tree)) (not wime--list-view)
-       wime--candidate-records
-       (> (wime-candidate-end (car wime--candidate-records)) 1)
-       (= (wime-candidate-end (car wime--candidate-records))
-          (length (wime--parse wime--input)))))
+  "Whether the current composition renders as one marked reading.
+The `tree' style also covers a single syllable and an incomplete last one."
+  (or (and (memq wime-candidate-style '(spans tree)) (not wime--list-view)
+           wime--candidate-records
+           (> (wime-candidate-end (car wime--candidate-records)) 1)
+           (= (wime-candidate-end (car wime--candidate-records))
+              (length (wime--parse wime--input))))
+      (wime-tree--tree-p)))
 
 (defun wime--format ()
   "Return the preedit string, including candidates when enabled."
@@ -1113,6 +1329,7 @@ In the span view only numbered alternatives respond; others do nothing."
 
 (defun wime--choose-span (start end text)
   "Fix TEXT at syllables START..END and decode the rest of the input again."
+  (wime-tree--choose-span start end)
   (when (wime--editing-p)
     (cl-incf wime-edit--generation))
   (let ((units (wime--parse wime--input)))
@@ -1179,6 +1396,7 @@ commits its selected candidate first."
 (defun wime-input-method (key)
   "Process KEY for the wanxiang input method."
   (cond
+   (wime-raw-input (wime-raw--input key))
    ((wime--text-read-only-p) (list key))
    (wime-english-mode (wime--english-input key))
    ((bound-and-true-p wime-edit-mode) (wime-edit--input-method key))
@@ -1287,7 +1505,13 @@ commits its selected candidate first."
 
 (defun wime-activate (_name)
   "Activate the wime input method."
-  (when wime-editable-preedit (wime-edit-mode 1))
+  ;; 树状候选和原始字母输入画树要用 wime-edit 的排版函数。
+  (when (or wime-raw-input (eq wime-candidate-style 'tree)) (require 'wime-edit))
+  (when (and wime-editable-preedit (not wime-raw-input)) (wime-edit-mode 1))
+  (add-hook 'post-command-hook #'wime-tree--post-command nil t)
+  (add-hook 'post-command-hook #'wime-raw--post-command nil t)
+  (add-hook 'wime-reset-hook #'wime-tree--reset nil t)
+  (add-hook 'wime-reset-hook #'wime-raw--reset nil t)
   (unless (eq wime-decoding 'lattice) (require 'wime-neural))
   (setq-local input-method-function #'wime-input-method)
   (setq-local deactivate-current-input-method-function #'wime-deactivate)
@@ -1299,6 +1523,10 @@ commits its selected candidate first."
   (wime--reset)
   (wime-english-mode -1)
   (wime-mode -1)
+  (remove-hook 'post-command-hook #'wime-tree--post-command t)
+  (remove-hook 'post-command-hook #'wime-raw--post-command t)
+  (remove-hook 'wime-reset-hook #'wime-tree--reset t)
+  (remove-hook 'wime-reset-hook #'wime-raw--reset t)
   (kill-local-variable 'input-method-function))
 
 (defun wime-setup ()

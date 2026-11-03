@@ -307,33 +307,35 @@ of truth.  Widen only for display; confirmation still respects narrowing."
   "Return a full reading, with a one-character fallback for incomplete keys.
 While a model decode is pending, characters already shown keep their text:
 dictionary guesses would replace the last decoded reading, and a character
-leaving the window at that moment would keep the guess."
-  (let* ((syllables (wime-edit--syllables wime-edit--units))
-         (n (length syllables))
-         (candidate (seq-find
-                     (lambda (c) (and (= (wime-candidate-end c) n)
-                                      (= (length (wime-candidate-text c)) n)))
-                     wime--candidate-records))
-         (guess (and candidate (wime-candidate-text candidate)))
-         (provisional (and (not wime--model-ranked)
-                           (not (eq wime-decoding 'lattice))
-                           (not (bound-and-true-p wime-neural--failed))
-                           (bound-and-true-p wime-neural-rescorer)))
-         (i -1))
-    (cond
-     ((not (wime-edit--decodable-p))
-      (mapconcat #'wime-edit--unit-text syllables ""))
-     ((and guess (not provisional)) guess)
-     (t
-      (let (wime--candidate-records wime--search-cache wime--pins)
-        (mapconcat (lambda (unit)
-                     (cl-incf i)
-                     (or (wime-edit--pin-text unit)
-                         (and provisional (wime-edit--shown unit))
-                         (and guess (substring guess i (1+ i)))
-                         (car (wime--candidates (wime-edit--unit-keys unit)))
-                         (substring (wime-edit--unit-keys unit) 0 1)))
-                   syllables ""))))))
+leaving the window at that moment would keep the guess.
+With the `tree' style an incomplete trailing syllable keeps the shown text."
+  (or (wime-tree--pending-text)
+      (let* ((syllables (wime-edit--syllables wime-edit--units))
+             (n (length syllables))
+             (candidate (seq-find
+                         (lambda (c) (and (= (wime-candidate-end c) n)
+                                          (= (length (wime-candidate-text c)) n)))
+                         wime--candidate-records))
+             (guess (and candidate (wime-candidate-text candidate)))
+             (provisional (and (not wime--model-ranked)
+                               (not (eq wime-decoding 'lattice))
+                               (not (bound-and-true-p wime-neural--failed))
+                               (bound-and-true-p wime-neural-rescorer)))
+             (i -1))
+        (cond
+         ((not (wime-edit--decodable-p))
+          (mapconcat #'wime-edit--unit-text syllables ""))
+         ((and guess (not provisional)) guess)
+         (t
+          (let (wime--candidate-records wime--search-cache wime--pins)
+            (mapconcat (lambda (unit)
+                         (cl-incf i)
+                         (or (wime-edit--pin-text unit)
+                             (and provisional (wime-edit--shown unit))
+                             (and guess (substring guess i (1+ i)))
+                             (car (wime--candidates (wime-edit--unit-keys unit)))
+                             (substring (wime-edit--unit-keys unit) 0 1)))
+                       syllables "")))))))
 
 (defun wime-edit--decodable-p ()
   "Whether flattening this run preserves its syllable boundaries."
@@ -615,8 +617,8 @@ fonts use the same units as the source-text alignment."
       (overlay-put wime-edit--decoration 'help-echo
                    "空格确认，ESC 暂存；TAB 切换整句候选")
       (wime-edit--refresh-pending-decorations)
-      (if (and (eq wime-candidate-style 'tree) (wime--spans-p))
-          (wime-tree--show text)
+      (if (eq wime-candidate-style 'tree)
+          (wime-tree--show-corrections text)
         (wime-edit--show-corrections text)))))
 
 (defun wime-edit--refresh (units cursor)
