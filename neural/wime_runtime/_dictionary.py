@@ -1,1 +1,0 @@
-../../gen/wime_gen.py

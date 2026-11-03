@@ -12,11 +12,9 @@ wime 是纯 Elisp 的中文双拼输入法。
 
 - 支持微软、小鹤、搜狗、自然码双拼，大写字母输入墨奇辅助码，
   =C-1= … =C-5= 输入声调。
-- 候选来自万象拼音词库的词格搜索；
-  有 GPU 时，停键后由本地神经模型重新整句解码。
+- 候选来自万象拼音词库的词格搜索，不需要 GPU 或神经模型。
 - 待上屏的文字直接写在 buffer 里，可以移动光标修改、补辅助码，
   拿不准的字就地给出替代写法。
-- 同一个后台还提供日文输入法，见 [[file:japanese/README.org][japanese/README.org]]。
 
 * 安装
 
@@ -47,8 +45,8 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 #+begin_src emacs-lisp
 (add-to-list 'load-path "/path/to/wime")
 (require 'wime)
-(setq wime-editable-preedit t
-      wime-candidate-style 'spans)
+(setq wime-raw-input t
+      wime-candidate-style 'tree)
 ;; 不是微软双拼时：
 ;; (setq wime-database-file (expand-file-name "wanxiang-flypy.db" wime-data-directory))
 (global-set-key (kbd "C-\\") #'wime-toggle-english)
@@ -67,12 +65,12 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 | 小写字母      | 双拼编码，两键一个音节                     |
 | 大写字母      | 前一个音节的辅助码，如 =niK=               |
 | =C-1= … =C-5= | 前一个音节的声调；=C-5= 是轻声，不筛选候选 |
-| 数字          | 选候选；分段视图里选那一段的替代写法       |
+| 数字          | 选候选；树状候选里改对应的词               |
 | 空格          | 确认文字                                   |
 | =RET=         | 按原始按键上屏英文                         |
 | =DEL=         | 删掉最后一个键                             |
 | =ESC=         | 暂存待上屏的文字                           |
-| =TAB=         | 在分段视图和整句列表之间切换               |
+| =TAB=         | 在树状候选和整句列表之间切换               |
 | =C-\\=        | 切换中文与英文                             |
 
 声调只保留带这个调的字；词里的变调不影响筛选，打字典里的本调即可。
@@ -93,15 +91,9 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 - 空格确认全部待上屏文字，再按一次空格才输入空格。
 - =ESC= 暂存，回来后可以继续改；启用 Evil 时同时进入 normal 状态。
 
-** 分段视图
-
-=wime-candidate-style= 为 =spans= 时不显示双拼串，
-模型拿不准的字加波浪线，替代写法竖排在下方，整段统一编号。
-按数字固定那一段，其余部分重新解码。
-
 ** 树状候选
 
-=wime-candidate-style= 设为 =tree= 时，最优读法切成词块并用线串起来。不需要神经模型。
+=wime-candidate-style= 设为 =tree= 时，最优读法切成词块并用线串起来。
 
 - 没把握的词（橙色；整句选了词频较低的词时是紫色）直接列出备选，全句连续编号，按数字只改这一个词，其余词不动。
 - 光标停在某个词里时只展开这个词，备选里有不同长度的词，可以重新切分；光标回到句尾恢复全句编号。
@@ -155,95 +147,11 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 在 100 句自然码测试句上，开启后完整输入的准确率不变（整句全对 31/100，逐字 84.9%）；最后一个字只打声母时整句全对从 0 提到 24/100。
 代价是每键延迟：中位数从 2ms 到 17ms，p90 从 27ms 到 33ms。大量随意简拼时切分经常猜错，这和 Rime 一样，靠改错交互补救。
 
-* 神经解码
-
-需要 GPU：通用语言模型用 Qwen3.5-2B 时约 5 GB 显存，
-用 Qwen3.5-0.8B 时约 3 GB，整句少对约 1%（759 句中 693 对 701），速度相同。
-CPU 太慢（一句要十几秒），不适用。
-下表的文件放在 =wime-data-directory= 下，各选项默认就指向这些位置；
-两个语言模型都在时用 2B。
-
-| 内容         | 位置                           | 来源                                  |
-|--------------+--------------------------------+---------------------------------------|
-| Python 环境  | =python/=                      | =neural/pyproject.toml= 和 =uv.lock=  |
-| 音节模型     | =wime-syllable-40m/=           | HF =0WD0/wime-syllable-40m=           |
-| 通用语言模型 | =rescorers/Qwen3.5-2B-Base/=   | HF =Qwen/Qwen3.5-2B-Base=，固定版本   |
-| 或者         | =rescorers/Qwen3.5-0.8B-Base/= | HF =Qwen/Qwen3.5-0.8B-Base=，固定版本 |
-
-在 wime 目录执行：
-
-#+begin_src sh
-D="${XDG_DATA_HOME:-$HOME/.local/share}/wime"
-UV_PROJECT_ENVIRONMENT="$D/python" uv sync --frozen --project neural --extra cuda
-"$D/python/bin/hf" download 0WD0/wime-syllable-40m \
-    --local-dir "$D/wime-syllable-40m"
-"$D/python/bin/hf" download Qwen/Qwen3.5-2B-Base \
-    --revision b1485b2fa6dfa1287294f269f5fb618e03d52d7c \
-    --local-dir "$D/rescorers/Qwen3.5-2B-Base"
-#+end_src
-
-显存不够时，最后一步换成：
-
-#+begin_src sh
-"$D/python/bin/hf" download Qwen/Qwen3.5-0.8B-Base \
-    --revision dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68 \
-    --local-dir "$D/rescorers/Qwen3.5-0.8B-Base"
-#+end_src
-
-=--extra= 按显卡选择 PyTorch：
-
-| 显卡                   | =--extra= |
-|------------------------+-----------|
-| NVIDIA（CUDA 13 驱动） | =cuda=    |
-| AMD（ROCm 7.2）        | =rocm=    |
-| Intel                  | =xpu=     |
-| Apple 芯片             | =mps=     |
-
-worker 自动使用找到的第一块 GPU。只在 NVIDIA 上测过。
-=HF_ENDPOINT= 可指向 Hugging Face 镜像。
-文件就位后，默认的 =hybrid= 就会用上模型；
-=(setq wime-decoding 'neural)= 等可以换一种转换方式：
-
-| =wime-decoding=  | 转换                                               |
-|------------------+----------------------------------------------------|
-| =hybrid=（默认） | 词格立即给出结果，停键后模型的整句结果排在前面     |
-| =neural=         | 只用模型；回来前新音节显示按键，空格和数字等它回来 |
-| =lattice=        | 只用词格                                           |
-
-=neural= 打不出模型不认识的字。
-worker 在后台常驻，首次启动要加载模型。
-它出错、超时或缺少文件时由词格转换（=hybrid= 缺少文件时不提示），
-=M-x wime-neural-restart= 重试。
-
-** 跑基准
-
-装好 Python 环境后执行：
-
-#+begin_src sh
-"$D/python/bin/wime-benchmark" --out benchmark.json
-#+end_src
-
-它逐键输入 =neural/wime_runtime/benchmark-cases.json= 里的 100 句维基百科句子，
-把按键延迟分位数、显存或内存峰值、加载时间和机器信息写进 =benchmark.json=。
-缺少的模型和词库按上文的位置下载。
-=--device cpu --cases 5 --threads 8= 在 CPU 上用 8 线程只测五句，=--beam= 可以重复；
-=--rescorer Qwen/Qwen3.5-0.8B-Base@dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68= 换小模型。
-
 * 工作方式
 
 打字时，wime 在词库上做词格搜索：
 按双拼码查词，按词频、每词罚项和可选的 octagram 搭配分打分，
 辅助码和声调是硬约束。追加、退格时复用仍然有效的前缀。
-
-停键 40 ms 后，输入发给本地的 GPU worker（=wime_runtime.worker=）。
-它逐字做 beam 搜索：音节模型（=neural/wime_runtime/transducer.py=）根据左文和
-每个音节的声母、韵母、声调给出汉字概率，加权上 Qwen 的概率；
-词库的读音、辅助码、声调和已选定的字是约束。
-结果回来时输入没变，就排在词格候选前面。
-词库里记录了各方案按键对应的声母和韵母，所以各方案共用同一个模型。
-
-音节模型只认识约 12,400 个汉字。
-词库里更生僻的字仍在词格候选中，用辅助码筛出来最快。
 
 * 上屏记录与学习
 
@@ -278,15 +186,12 @@ python3 gen/wime_gen.py --rime-data /path/to/unzipped \
 #+end_src
 
 =--rime-data= 是含 =wanxiang_pro.dict.yaml= 的目录。
-自定义方案时复制一份 JSON 修改。词库记录每组键对应的声母和韵母，
-神经解码据此读取新方案；两个音节共用一组键时，模型只看到其中一个。
+自定义方案时复制一份 JSON 修改。
 
 * 许可
 
 - 代码：GPL-3.0-or-later，见 =LICENSE=。
 - 词库：万象拼音（amzxyz），CC-BY-4.0。
-- 音节模型：CC-BY-SA-4.0。
-- Qwen3.5-2B-Base 和 Qwen3.5-0.8B-Base：Apache-2.0。
 
 * 尚未实现
 

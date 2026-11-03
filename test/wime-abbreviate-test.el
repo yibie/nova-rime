@@ -17,7 +17,7 @@
          (wime--db nil) (wime--db-failed nil) (wime--initials-index nil)
          (wime--abbreviation-state nil) (wime--search-cache nil)
          (wime-abbreviate t) (wime-word-penalty 20.0) (wime-abbreviation-penalty 4.0)
-         (wime-user-database nil) (wime-grammar-module nil) (wime-decoding 'lattice))
+         (wime-user-database nil) (wime-grammar-module nil))
      (clrhash wime--abbreviation-cache)
      (unwind-protect (progn ,@body)
        (when wime--db (sqlite-close wime--db)))))

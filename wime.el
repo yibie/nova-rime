@@ -60,7 +60,7 @@
 
 (defface wime-uncertain-face
   '((t (:underline (:style wave :color "orange"))))
-  "Face for characters whose reading a reranker is unsure of."
+  "Face for characters whose reading is uncertain."
   :group 'wime)
 
 (defface wime-pinned-face
@@ -177,9 +177,8 @@ Return point to disable context.  Errors or invalid markers also yield none.")
 (defvar-local wime-context-prefix-function nil
   "Optional function returning text that precedes this buffer's input, or nil.
 Called without arguments, for example by a chat buffer to supply its latest
-messages before the composer.  The neural decoder reads the text right
-before the buffer context; the lattice and the commit log never see it.
-Errors yield no prefix.")
+messages before the composer.  The commit log records it with the buffer
+context; the lattice never sees it.  Errors yield no prefix.")
 
 (defun wime--context-prefix ()
   "Return `wime-context-prefix-function' text, or the empty string."
@@ -315,18 +314,6 @@ tone filters nothing."
 (defvar wime-reset-hook nil
   "Hook run when a composition is discarded or committed.")
 
-(defcustom wime-decoding 'hybrid
-  "How Chinese compositions are converted.
-`lattice': the dictionary lattice alone.
-`hybrid': the lattice answers at once; after a typing pause the model's
-  whole-input readings come first, then the lattice's words.
-`neural': the model's readings alone.  New syllables show their keys until
-  it answers, and SPC or a digit waits for it.  Characters the model does
-  not know cannot be typed.
-The last two load `wime-neural' and its local worker; while the worker or
-its model files are unavailable, the lattice converts."
-  :type '(choice (const lattice) (const hybrid) (const neural)) :group 'wime)
-
 (defvar wime-lattice-inhibit-functions nil
   "Functions of the parsed units; if one returns non-nil, skip the lattice.")
 
@@ -381,26 +368,14 @@ its model files are unavailable, the lattice converts."
 
 (defcustom wime-candidate-style 'list
   "How a complete multi-syllable composition shows its candidates.
-`list' numbers whole sentences.  `spans' shows the best reading once,
-marks characters a reranker is unsure of, and numbers alternatives for
-those spans only; a digit fixes that span and the rest is decoded again.
+`list' numbers whole sentences.
 `tree' splits the best reading into word chips joined by a line.  Words
 the dictionary is unsure of list alternatives with sentence-wide labels;
 with point inside a word only that word lists them.  Words already typed
-past stay fixed while later syllables arrive.  It needs no reranker.
+past stay fixed while later syllables arrive.
 \\<wime-active-mode-map>\\[wime-toggle-candidate-list] switches one
 composition back to the sentence list."
-  :type '(choice (const list) (const spans) (const tree)) :group 'wime)
-
-(defcustom wime-confidence-threshold 0.9
-  "Characters with a lower estimated probability are marked uncertain."
-  :type 'number :group 'wime)
-
-(defcustom wime-confidence-temperature 3.0
-  "Temperature turning per-character reranker scores into probabilities.
-3.0 was calibrated on development pools for the earlier 25M conditional
-model with the Qwen3.5-2B rescorer, not yet for the syllable transducer."
-  :type 'number :group 'wime)
+  :type '(choice (const list) (const tree)) :group 'wime)
 
 (defvar-local wime--input nil
   "Raw typed string, preserving the case and order of the keys.")
@@ -410,12 +385,6 @@ model with the Qwen3.5-2B rescorer, not yet for the syllable transducer."
 
 (defvar-local wime--selected 0
   "Index into `wime--candidates' of the selected candidate.")
-
-(defvar-local wime--model-ranked nil
-  "Non-nil once a model result has been applied to the current candidates.")
-
-(defvar-local wime--candidate-scores nil
-  "Reranker scores for the current records, as (TEXT . PER-CHARACTER SCORE).")
 
 (defvar-local wime--span-choices nil
   "Displayed span alternatives in label order, as (START END TEXT) lists.")
@@ -702,8 +671,6 @@ prefix of one of its comma-separated groups."
    (list (read-file-name "wime database: "
                          (and wime-database-file (file-name-directory wime-database-file))
                          wime-database-file t)))
-  (when (fboundp 'wime-neural--stop)
-    (wime-neural--stop))
   (when wime--db
     (ignore-errors (sqlite-close wime--db)))
   (setq wime-database-file (and file (expand-file-name file))
@@ -1110,74 +1077,10 @@ Rime completes partial pinyin."
     (delete-overlay wime--overlay))
   (setq wime--overlay nil))
 
-(defun wime--uncertain-spans (top scores)
-  "Return (START END ALTERNATIVES) for runs of TOP that SCORES leave uncertain.
-SCORES are (TEXT . PER-CHARACTER SCORE).  Readings of TOP's length form a
-posterior; a character is uncertain below `wime-confidence-threshold'.
-ALTERNATIVES are other substrings at that span, most probable first."
-  (let* ((n (length top))
-         (aligned (seq-filter (lambda (s) (= (length (car s)) n)) scores))
-         (best (and aligned (apply #'max (mapcar #'cdr aligned))))
-         (weights (mapcar (lambda (s)
-                            (cons (car s) (exp (/ (* n (- (cdr s) best))
-                                                  wime-confidence-temperature))))
-                          aligned))
-         (total (apply #'+ (mapcar #'cdr weights)))
-         (sure (lambda (i)
-                 (>= (/ (cl-loop for (text . w) in weights
-                                 when (eq (aref text i) (aref top i)) sum w)
-                        total)
-                     wime-confidence-threshold)))
-         (i 0) spans)
-    (when aligned
-      (while (< i n)
-        (if (funcall sure i)
-            (cl-incf i)
-          (let ((j i) (mass (make-hash-table :test #'equal)))
-            (while (and (< j n) (not (funcall sure j))) (cl-incf j))
-            (pcase-dolist (`(,text . ,w) weights)
-              (let ((part (substring text i j)))
-                (unless (equal part (substring top i j))
-                  (puthash part (+ w (gethash part mass 0)) mass))))
-            (push (list i j (seq-take (sort (hash-table-keys mass)
-                                            (lambda (a b) (> (gethash a mass) (gethash b mass))))
-                                      wime-candidates-max))
-                  spans)
-            (setq i j)))))
-    (nreverse spans)))
-
-(defun wime--format-spans (top)
-  "Return TOP with uncertain spans marked and their alternatives numbered.
-Set `wime--span-choices' to the labeled alternatives, in label order."
-  (let ((spans (wime--uncertain-spans top wime--candidate-scores))
-        (pinned (mapcar #'car wime--pins))
-        (label 0) parts choices)
-    (dotimes (i (length top))
-      (push (propertize (substring top i (1+ i)) 'face
-                        (cond ((memq i pinned) 'wime-pinned-face)
-                              ((seq-find (lambda (span) (and (<= (car span) i) (< i (nth 1 span))))
-                                         spans)
-                               'wime-uncertain-face)
-                              (t 'wime-candidate-face)))
-            parts)
-      (pcase-dolist (`(,start ,end ,alternatives) spans)
-        (when (= (1+ i) end)
-          (dolist (alternative alternatives)
-            (when (< label 10)
-              (cl-incf label)
-              ;; Each alternative is boxed, its label outside, so options stand
-              ;; apart from each other and from the reading around them.
-              (push (concat (propertize (number-to-string (% label 10)) 'face 'wime-label-face)
-                            (propertize alternative 'face 'wime-alternatives-face))
-                    parts)
-              (push (list start end alternative) choices))))))
-    (setq wime--span-choices (nreverse choices))
-    (apply #'concat (nreverse parts))))
-
 (defun wime--spans-p ()
-  "Whether the current composition renders as one marked reading.
+  "Whether the current composition renders as one reading with word alternatives.
 The `tree' style also covers a single syllable and an incomplete last one."
-  (or (and (memq wime-candidate-style '(spans tree)) (not wime--list-view)
+  (or (and (eq wime-candidate-style 'tree) (not wime--list-view)
            wime--candidate-records
            (> (wime-candidate-end (car wime--candidate-records)) 1)
            (= (wime-candidate-end (car wime--candidate-records))
@@ -1197,7 +1100,7 @@ The `tree' style also covers a single syllable and an incomplete last one."
               (or wime--input "") "")
    (cond
     ((not (and wime-show-candidates wime--candidates)) nil)
-    ((wime--spans-p) (concat " " (wime--format-spans (car wime--candidates))))
+    ((wime--spans-p) (concat " " (car wime--candidates)))
     (t (concat " " (wime--format-list wime--candidates wime--selected))))))
 
 (defun wime--format-list (candidates selected)
@@ -1230,8 +1133,7 @@ The `tree' style also covers a single syllable and an incomplete last one."
     (setq wime--pins (seq-filter (lambda (pin)
                                    (equal (car (nth (car pin) units)) (nth 2 pin)))
                                  wime--pins)))
-  (setq wime--candidate-scores nil wime--model-ranked nil
-        wime--candidates (wime--candidates wime--input)
+  (setq wime--candidates (wime--candidates wime--input)
         wime--selected 0)
   ;; A pinned refresh shows the user's own correction, not wime's offer.
   (unless wime--pins
@@ -1246,8 +1148,6 @@ The `tree' style also covers a single syllable and an incomplete last one."
         wime--candidate-records nil
         wime--search-cache nil
         wime--candidates nil
-        wime--candidate-scores nil
-        wime--model-ranked nil
         wime--span-choices nil
         wime--pins nil
         wime--typed-tones nil
@@ -1514,7 +1414,6 @@ commits its selected candidate first."
   (add-hook 'post-command-hook #'wime-raw--post-command nil t)
   (add-hook 'wime-reset-hook #'wime-tree--reset nil t)
   (add-hook 'wime-reset-hook #'wime-raw--reset nil t)
-  (unless (eq wime-decoding 'lattice) (require 'wime-neural))
   (setq-local input-method-function #'wime-input-method)
   (setq-local deactivate-current-input-method-function #'wime-deactivate)
   (wime-english-mode -1)

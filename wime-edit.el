@@ -305,9 +305,6 @@ of truth.  Widen only for display; confirmation still respects narrowing."
 
 (defun wime-edit--candidate-text ()
   "Return a full reading, with a one-character fallback for incomplete keys.
-While a model decode is pending, characters already shown keep their text:
-dictionary guesses would replace the last decoded reading, and a character
-leaving the window at that moment would keep the guess.
 With the `tree' style an incomplete trailing syllable keeps the shown text."
   (or (wime-tree--pending-text)
       (let* ((syllables (wime-edit--syllables wime-edit--units))
@@ -317,22 +314,16 @@ With the `tree' style an incomplete trailing syllable keeps the shown text."
                                           (= (length (wime-candidate-text c)) n)))
                          wime--candidate-records))
              (guess (and candidate (wime-candidate-text candidate)))
-             (provisional (and (not wime--model-ranked)
-                               (not (eq wime-decoding 'lattice))
-                               (not (bound-and-true-p wime-neural--failed))
-                               (bound-and-true-p wime-neural-rescorer)))
              (i -1))
         (cond
          ((not (wime-edit--decodable-p))
           (mapconcat #'wime-edit--unit-text syllables ""))
-         ((and guess (not provisional)) guess)
+         (guess guess)
          (t
           (let (wime--candidate-records wime--search-cache wime--pins)
             (mapconcat (lambda (unit)
                          (cl-incf i)
                          (or (wime-edit--pin-text unit)
-                             (and provisional (wime-edit--shown unit))
-                             (and guess (substring guess i (1+ i)))
                              (car (wime--candidates (wime-edit--unit-keys unit)))
                              (substring (wime-edit--unit-keys unit) 0 1)))
                        syllables "")))))))
@@ -345,7 +336,7 @@ With the `tree' style an incomplete trailing syllable keeps the shown text."
 (defun wime-edit--pending-refresh ()
   "Display an incomplete interior syllable without changing its neighbors."
   (setq wime--candidate-records nil wime--candidates nil
-        wime--candidate-scores nil wime--span-choices nil)
+        wime--span-choices nil)
   (wime-active-mode 1)
   (wime--display)
   (run-hooks 'wime-candidates-updated-hook))
@@ -427,23 +418,11 @@ All real edits remain undoable; ordinary buffer modification hooks still run."
 
 (defun wime-edit--correction-groups (text)
   "Return (START END OPTIONS) groups, where OPTIONS contain (LABEL . TEXT).
-Span labels share one sequence across the whole run.  Whole-sentence labels
-keep their original indices, including the reading already shown in TEXT."
+Whole-sentence labels keep their original indices, including the reading
+already shown in TEXT.  The tree view draws its own alternatives."
   (setq wime--span-choices nil)
   (when (and wime-show-candidates wime--candidates)
-    (if (wime--spans-p)
-        (let ((label 0) groups choices)
-          (pcase-dolist (`(,start ,end ,alternatives)
-                         (wime--uncertain-spans text wime--candidate-scores))
-            (let (options)
-              (dolist (alternative alternatives)
-                (when (< label 10)
-                  (cl-incf label)
-                  (push (cons (% label 10) alternative) options)
-                  (push (list start end alternative) choices)))
-              (when options (push (list start end (nreverse options)) groups))))
-          (setq wime--span-choices (nreverse choices))
-          (nreverse groups))
+    (unless (wime--spans-p)
       (let ((label 0) options)
         (dolist (candidate wime--candidates)
           (cl-incf label)

@@ -2,7 +2,6 @@
 
 (require 'ert)
 (require 'wime-edit)
-(require 'wime-neural)
 
 (defconst wime-edit-test--dictionary
   '(("aa" ("甲" "a" 100) ("乙" "b" 90))
@@ -14,9 +13,6 @@
   "Run BODY with editable input and a portable deterministic dictionary."
   (declare (indent 0))
   `(let ((wime-editable-preedit t)
-         ;; Batch wdoom may configure model decoding; these tests drive the
-         ;; editor with dictionary results alone.
-         (wime-decoding 'lattice)
          (wime-candidates-updated-hook nil)
          (wime-candidate-style 'list)
          (wime-show-candidates t)
@@ -114,63 +110,6 @@
     (wime-edit-test--type "b;")
     (should (equal (buffer-substring-no-properties 1 (point-max)) "甲并丁"))
     (should (equal (mapcar #'wime-edit-test--keys '(1 2 3)) '("aa" "b;" "bbD")))))
-
-(ert-deftest wime-edit-incomplete-middle-key-keeps-text-and-defers-search ()
-  (wime-edit-test--buffer
-    (wime-edit-test--type "aabbD")
-    (wime-edit-test--command #'backward-char 1)
-    (let ((lookup (symbol-function 'wime--candidates)) candidate-calls)
-      (cl-letf (((symbol-function 'wime--candidates)
-                 (lambda (input)
-                   (push input candidate-calls)
-                   (funcall lookup input))))
-        (wime-edit-test--type "c"))
-      ;; Flattening aa,c,bbD would invent a different syllable cb.  Its
-      ;; provisional key is shown in place without interpreting that string.
-      (should (equal (buffer-substring-no-properties 1 (point-max)) "甲c丁"))
-      (should (equal (mapcar #'wime-edit-test--keys '(1 2 3)) '("aa" "c" "bbD")))
-      (should-not (member "aacbbD" candidate-calls))
-      (should-not wime--candidate-records))
-    (let ((wime-decoding 'hybrid)
-          (wime-neural-model-file "unused-model")
-          (wime-neural-rescorer "unused-rescorer")
-          (wime-neural-single-character t)
-          (wime-neural--failed nil)
-          scheduled)
-      (cl-letf (((symbol-function 'run-with-timer)
-                 (lambda (_delay _repeat _function job) (setq scheduled job) nil))
-                ((symbol-function 'wime--database) (lambda () nil))
-                ((symbol-function 'sqlite-select) (lambda (&rest _) '(("wime-syllable-features-v1")))))
-        (wime-neural--schedule)
-        (should-not scheduled)
-        (wime-edit-test--type "c")
-        (should (equal (buffer-substring-no-properties 1 (point-max)) "甲戊丁"))
-        (should (equal (mapcar #'wime-edit-test--keys '(1 2 3)) '("aa" "cc" "bbD")))
-        (wime-neural--schedule)
-        (should scheduled)
-        (should (equal (wime-neural--job-input scheduled) "aaccbbD"))))))
-
-(ert-deftest wime-edit-neural-decoding-shows-keys-until-the-model-answers ()
-  (wime-edit-test--buffer
-    (let ((wime-decoding 'neural)
-          (wime-neural-model-file "unused-model") (wime-neural-rescorer "unused-rescorer")
-          (wime-neural-single-character t) (wime-neural--failed nil)
-          (wime-candidates-updated-hook '(wime-neural--schedule))
-          (wime-lattice-inhibit-functions '(wime-neural--exclusive-p))
-          scheduled)
-      (cl-letf (((symbol-function 'run-with-timer)
-                 (lambda (_delay _repeat _function job) (setq scheduled job) nil))
-                ((symbol-function 'wime--database) (lambda () nil))
-                ((symbol-function 'sqlite-select) (lambda (&rest _) '(("wime-syllable-features-v1")))))
-        (wime-edit-test--type "aabb")
-        (should (equal (buffer-substring-no-properties 1 (point-max)) "ab"))
-        (should-not wime--candidates)
-        (wime-neural--apply scheduled '((candidates . [["乙丁" -1.0]])))
-        (should (equal (buffer-substring-no-properties 1 (point-max)) "乙丁"))
-        (should (equal wime--candidates '("乙丁")))
-        ;; Decoded characters stay while the next syllable waits.
-        (wime-edit-test--type "cc")
-        (should (equal (buffer-substring-no-properties 1 (point-max)) "乙丁c"))))))
 
 (ert-deftest wime-edit-space-confirms-and-next-space-is-literal ()
   (wime-edit-test--buffer
@@ -376,19 +315,6 @@
 
 ;; A decoded reading must survive the dictionary guess shown while the next
 ;; decode is pending; otherwise a character leaving the window keeps the guess.
-(ert-deftest wime-edit-pending-decode-keeps-decoded-characters ()
-  (wime-edit-test--buffer
-    (let ((wime-decoding 'hybrid) (wime-neural--failed nil)
-          (wime-neural-rescorer "lm") (wime-neural-single-character t))
-      (wime-edit-test--type "aa")
-      (should (equal (buffer-substring-no-properties 1 (point-max)) "甲"))
-      (setq wime--candidate-records (list (wime--make-candidate :text "乙" :score 0 :end 1))
-            wime--model-ranked t)
-      (wime--display)
-      (should (equal (buffer-substring-no-properties 1 (point-max)) "乙"))
-      (wime-edit-test--type "bb")
-      (should (equal (buffer-substring-no-properties 1 (point-max)) "乙丙")))))
-
 (ert-deftest wime-edit-deleting-the-last-syllable-leaves-literals-as-text ()
   (wime-edit-test--buffer
     (setq current-input-method "wime")
@@ -721,159 +647,6 @@
     (should (equal (wime-edit-test--aux-text) "B"))
     (should (equal (buffer-substring-no-properties 1 (point-max)) "乙丙"))))
 
-(ert-deftest wime-edit-span-corrections-form-aligned-vertical-groups ()
-  (wime-edit-test--buffer
-    (let ((wime-edit-test--dictionary
-           '(("aa" ("甲" "a" 100) ("乙" "b" 90) ("己" "h" 80))
-             ("bb" ("丙" "c" 100) ("丁" "d" 90) ("庚" "i" 80))
-             ("cc" ("戊" "e" 100)))))
-      (wime-edit-test--type "aaccccccbb")
-      (let ((wime-candidate-style 'spans))
-        (cl-letf (((symbol-function 'wime--uncertain-spans)
-                   (lambda (_top _scores) '((0 1 ("乙" "己")) (4 5 ("丁" "庚"))))))
-          (wime--display)
-          (should (equal wime--span-choices '((0 1 "乙") (0 1 "己") (4 5 "丁") (4 5 "庚"))))
-          (let* ((text (wime-edit-test--correction-text))
-                 (rows (split-string text "\n" t)))
-            (should (string-prefix-p "\n" text))
-            (should (= (length rows) 2))
-            (should (string-match-p "1[^0-9]*乙" (nth 0 rows)))
-            (should (string-match-p "3[^0-9]*丁" (nth 0 rows)))
-            (should (string-match-p "2[^0-9]*己" (nth 1 rows)))
-            (should (string-match-p "4[^0-9]*庚" (nth 1 rows)))
-            (should-not (string-match-p "甲戊戊戊丙" text))
-            (should (equal (wime-edit-test--alignments (nth 0 rows)) '(0 6)))
-            (should (equal (wime-edit-test--alignments (nth 1 rows)) '(0 6))))
-          (wime-edit-test--type "3")
-          (should (equal (buffer-substring-no-properties 1 (point-max)) "甲戊戊戊丁"))
-          (should-not (wime-edit--unit-pin (wime-edit--unit-at 1)))
-          (should (eq (wime-edit--unit-pin (wime-edit--unit-at 5)) ?丁)))))))
-
-(ert-deftest wime-edit-nearby-spans-share-rows-with-one-han-label-gutters ()
-  ;; The screenshot's first and third characters leave exactly one Han cell
-  ;; for each label.  Test the entire layout path: a box or a one-pixel font
-  ;; rounding excess can make these groups collide even without row padding.
-  ;; Also run this test in a GUI at Maple Mono NF CN Kai heights 120/140/160.
-  (wime-edit-test--buffer
-    (let ((wime-edit-test--dictionary
-           '(("aa" ("那" "a" 100) ("哪" "b" 90) ("呐" "c" 80) ("拿" "d" 70))
-             ("bb" ("有" "a" 100))
-             ("cc" ("点" "a" 100) ("店" "b" 90) ("电" "c" 80))
-             ("dd" ("大" "a" 100))
-             ("ee" ("了" "a" 100)))))
-      (save-window-excursion
-        (delete-other-windows)
-        (switch-to-buffer (current-buffer))
-        (insert ">>> ")
-        (wime-edit-test--type "aabbccddee")
-        (let ((wime-candidate-style 'spans))
-          (cl-letf (((symbol-function 'wime--uncertain-spans)
-                     (lambda (_top _scores)
-                       '((0 1 ("哪" "呐" "拿")) (2 3 ("店" "电"))))))
-            (wime--display)
-            (should (equal (buffer-substring-no-properties 1 (point-max))
-                           ">>> 那有点大了"))
-            (should (equal wime--span-choices
-                           '((0 1 "哪") (0 1 "呐") (0 1 "拿") (2 3 "店") (2 3 "电"))))
-            (cl-labels
-                ((assert-layout ()
-                   (redisplay t)
-                   (should (= (length (wime-edit-test--correction-lines)) 1))
-                   (let* ((text (wime-edit-test--correction-text))
-                          (rows (split-string text "\n" t)))
-                     (should (= (length rows) 3))
-                     (should (string-match-p "1[.]哪.*4[.]店" (nth 0 rows)))
-                     (should (string-match-p "2[.]呐.*5[.]电" (nth 1 rows)))
-                     (should (string-match-p "3[.]拿" (nth 2 rows)))
-                     (should-not (face-attribute 'wime-alternatives-face :box nil t))
-                     ;; Emacs 31+ can measure the rendered buffer's remappings
-                     ;; directly.  Older versions still exercise the layout.
-                     (when (and (display-graphic-p) (>= emacs-major-version 31))
-                       (let ((position 0) (labels 0))
-                         (while (string-match "\\([1-5][.]\\)\\([哪呐拿店电]\\)" text position)
-                           (let ((label (match-string 1 text))
-                                 (han (match-string 2 text)))
-                             (setq position (match-end 0))
-                             (cl-incf labels)
-                             (should (<= (string-pixel-width label (current-buffer))
-                                         (string-pixel-width han (current-buffer))))))
-                         (should (= labels 5)))
-                       ;; Scaled labels must leave the candidate Han characters
-                       ;; under the source, not merely produce the same row count.
-                       (cl-loop for column in (wime-edit-test--alignments (car rows))
-                                for number in '(1 4)
-                                for source in '(5 7)
-                                do (should (string-match (format "\\(%d[.]\\)" number) (car rows)))
-                                do (let* ((label (match-string 1 (car rows)))
-                                          (candidate-x
-                                           (+ (line-number-display-width t)
-                                              (* column (frame-char-width))
-                                              (string-pixel-width label (current-buffer))))
-                                          (source-x (car (posn-x-y (posn-at-point source)))))
-                                     (should (< (abs (- candidate-x source-x)) 1.0))))))))
-              (assert-layout)
-              (let ((old (copy-sequence wime-edit--correction-decorations)))
-                (display-line-numbers-mode 1)
-                (wime-edit-test--command #'ignore)
-                (should (seq-every-p (lambda (overlay) (not (overlay-buffer overlay))) old))
-                (assert-layout))
-              (let ((old (copy-sequence wime-edit--correction-decorations)))
-                (text-scale-set 2)
-                (wime-edit-test--command #'ignore)
-                (should (seq-every-p (lambda (overlay) (not (overlay-buffer overlay))) old))
-                (assert-layout)))))))))
-
-(ert-deftest wime-edit-tenth-span-correction-is-labeled-and-selected-with-zero ()
-  (wime-edit-test--buffer
-    (let* ((alternatives '("乙" "丁" "戊" "己" "庚" "辛" "壬" "癸" "子" "丑" "卯"))
-           (wime-edit-test--dictionary
-            `(("aa" ("甲" "a" 100)
-               ,@(cl-loop for text in alternatives for weight downfrom 90
-                          collect (list text "b" weight)))
-              ("bb" ("丙" "c" 100)))))
-      (wime-edit-test--type "aabb")
-      (let ((wime-candidate-style 'spans))
-        (cl-letf (((symbol-function 'wime--uncertain-spans)
-                   (lambda (_top _scores) (list (list 0 1 alternatives)))))
-          (wime--display)
-          (should (= (length wime--span-choices) 10))
-          (should (equal (nth 9 wime--span-choices) '(0 1 "丑")))
-          (let* ((text (wime-edit-test--correction-text))
-                 (rows (split-string text "\n" t)))
-            (should (= (length rows) 10))
-            (should (string-match-p "0[^0-9]*丑" (nth 9 rows)))
-            (should-not (string-match-p "10" text))
-            (should-not (string-match-p "卯" text)))
-          (wime-edit-test--type "0")
-          (should (equal (buffer-substring-no-properties 1 (point-max)) "丑丙"))
-          (should (eq (wime-edit--unit-pin (wime-edit--unit-at 1)) ?丑)))))))
-
-(ert-deftest wime-edit-tab-shows-whole-corrections-with-original-indices ()
-  (wime-edit-test--buffer
-    (wime-edit-test--type "aabb")
-    (setq wime--candidate-records
-          (mapcar (lambda (text) (wime--make-candidate :text text :end 2 :score 1.0))
-                  '("甲丙" "乙丙" "甲丁"))
-          wime--candidates '("甲丙" "乙丙" "甲丁"))
-    (let ((wime-candidate-style 'spans))
-      (cl-letf (((symbol-function 'wime--uncertain-spans)
-                 (lambda (_top _scores) '((0 1 ("乙"))))))
-        (wime--display)
-        (should wime--span-choices)
-        (wime-edit-test--command (key-binding (kbd "TAB")))
-        (should wime--list-view)
-        (should-not wime--span-choices)
-        (let* ((text (wime-edit-test--correction-text))
-               (rows (split-string text "\n" t)))
-          (should (= (length rows) 3))
-          (should (string-match-p "1[.]甲丙" (nth 0 rows)))
-          (should (string-match-p "2[.]乙丙" (nth 1 rows)))
-          (should (string-match-p "3[.]甲丁" (nth 2 rows))))
-        (wime-edit-test--type "2")
-        (should (equal (buffer-substring-no-properties 1 (point-max)) "乙丙"))
-        (should (equal (mapcar (lambda (p) (wime-edit--unit-pin (wime-edit--unit-at p)))
-                               '(1 2)) '(?乙 ?丙)))))))
-
 (ert-deftest wime-edit-candidate-column-respects-the-limit-and-digit-selection ()
   (wime-edit-test--buffer
     (let* ((wime-candidates-max 5)
@@ -895,22 +668,6 @@
       (should (eq (wime-edit--unit-pin (wime-edit--unit-at 1)) ?戊))
       ;; The selected reading remains visible even when it is the only choice.
       (should (string-match-p "1[.]戊" (wime-edit-test--correction-text))))))
-
-(ert-deftest wime-edit-hidden-corrections-cannot-use-stale-span-shortcuts ()
-  (wime-edit-test--buffer
-    (wime-edit-test--type "aabb")
-    (let ((wime-candidate-style 'spans))
-      (cl-letf (((symbol-function 'wime--uncertain-spans)
-                 (lambda (_top _scores) '((0 1 ("乙"))))))
-        (wime--display)
-        (should wime--span-choices)
-        (let ((wime-show-candidates nil))
-          (wime--display)
-          (should-not wime-edit--correction-decorations)
-          (should-not wime--span-choices)
-          (wime-edit-test--type "1")
-          (should (equal (buffer-substring-no-properties 1 (point-max)) "甲丙"))
-          (should-not wime--pins))))))
 
 (ert-deftest wime-edit-pausing-and-confirming-remove-correction-overlays ()
   (wime-edit-test--buffer
