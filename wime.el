@@ -1327,9 +1327,11 @@ In the span view only numbered alternatives respond; others do nothing."
       (when-let* ((text (nth index wime--candidates)))
         (wime--commit text)))))
 
-(defun wime--choose-span (start end text)
-  "Fix TEXT at syllables START..END and decode the rest of the input again."
-  (wime-tree--choose-span start end)
+(defun wime--choose-span (start end text &optional split)
+  "Fix TEXT at syllables START..END and decode the rest of the input again.
+SPLIT is (START END WORD) when TEXT replaces one character of WORD; the
+other characters of WORD stay as they are."
+  (wime-tree--choose-span start end split)
   (when (wime--editing-p)
     (cl-incf wime-edit--generation))
   (let ((units (wime--parse wime--input)))

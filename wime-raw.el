@@ -248,15 +248,57 @@
         (when-let* ((text (nth index wime--candidates)))
           (wime-raw--commit-text text))
       (when-let* ((choice (nth index wime--span-choices)))
-        (pcase-let ((`(,start ,end ,text) choice))
-          (wime-tree--choose-span start end)
-          (let ((units (wime--parse wime--input)))
-            (setq wime--pins
-                  (append (cl-loop for i from start below end
-                                   collect (list i (aref text (- i start)) (car (nth i units))))
-                          (seq-remove (lambda (pin) (and (<= start (car pin)) (< (car pin) end)))
-                                      wime--pins))))
-          (wime-raw--refresh))))))
+        (wime-tree--cycle-restore)
+        (setq wime-tree--cycle nil)
+        (wime-raw--apply choice)))))
+
+(defun wime-raw--apply (choice)
+  "把 CHOICE (START END TEXT [SPLIT]) 固定下来，其余重新解码。"
+  (pcase-let ((`(,start ,end ,text ,split) choice))
+    (wime-tree--choose-span start end split)
+    (let ((units (wime--parse wime--input)))
+      (setq wime--pins
+            (append (cl-loop for i from start below end
+                             collect (list i (aref text (- i start)) (car (nth i units))))
+                    (seq-remove (lambda (pin) (and (<= start (car pin)) (< (car pin) end)))
+                                wime--pins))))
+    (wime-raw--refresh)))
+
+(defun wime-raw--focused-p ()
+  "光标停在某个词上：上下键换词、翻页键翻备选。"
+  (and (wime-raw--active-p) (wime-raw--inside-p) (not wime--list-view) wime-tree--focus))
+
+(defun wime-raw--cycle (delta)
+  (when wime-raw--dirty (wime-raw--refresh))
+  (pcase (wime-tree--cycle-step delta)
+    ('nil nil)
+    ('t (wime-raw--refresh))
+    (choice (wime-raw--apply choice))))
+
+(defun wime-raw-next-alternative ()
+  "↓：光标所在的词换成下一个备选，句子马上更新。"
+  (interactive)
+  (wime-raw--cycle 1))
+
+(defun wime-raw-previous-alternative ()
+  "↑：换回上一个备选；一路按回去回到原来的词。"
+  (interactive)
+  (wime-raw--cycle -1))
+
+(defun wime-raw--page (delta)
+  (when wime-raw--dirty (wime-raw--refresh))
+  (when (wime-tree--turn-page delta)
+    (wime-raw--display)))
+
+(defun wime-raw-next-page ()
+  "光标所在的词的备选翻到下一页。"
+  (interactive)
+  (wime-raw--page 1))
+
+(defun wime-raw-previous-page ()
+  "光标所在的词的备选翻到上一页。"
+  (interactive)
+  (wime-raw--page -1))
 
 (defun wime-raw--commit-text (text &optional rest)
   "把输入换成 TEXT 上屏，wime 照常记录和学习；REST 是留下来继续输入的字母。"
@@ -329,6 +371,10 @@
      ((and active (= key ?\s))
       (wime-raw-commit)
       nil)
+     ;; 光标停在词上时 - = , . 翻这个词的备选；在末尾时照常出标点。
+     ((and (memq key '(?- ?= ?, ?.)) (wime-raw--focused-p))
+      (wime-raw--page (if (memq key '(?- ?,)) -1 1))
+      nil)
      ((wime--punctuation-for key)
       (when active (wime-raw-commit))
       (insert (wime--punctuation-for key))
@@ -343,6 +389,9 @@
   (when (and (markerp wime-raw--start) (marker-buffer wime-raw--start)
              (not (wime-raw--active-p)))
     (wime-raw--stop))
+  ;; 换词只在连续按上下键时继续；按了别的键，下次从新的状态重新开始。
+  (unless (memq this-command '(wime-raw-next-alternative wime-raw-previous-alternative))
+    (setq wime-tree--cycle nil))
   (when (wime-raw--active-p)
     (cond
      ((not (wime-raw--inside-p)) (wime-raw-commit))
@@ -359,6 +408,14 @@
     (define-key map (kbd "<return>") #'wime-raw-commit-letters)
     (define-key map (kbd "<escape>") #'wime-raw-escape)
     (define-key map (kbd "TAB") #'wime-raw-toggle-list)
+    ;; 只在光标停在词上时生效，否则照常移动。
+    (dolist (binding '(("<down>" . wime-raw-next-alternative)
+                       ("<up>" . wime-raw-previous-alternative)
+                       ("<next>" . wime-raw-next-page)
+                       ("<prior>" . wime-raw-previous-page)))
+      (define-key map (kbd (car binding))
+                  `(menu-item "" ,(cdr binding)
+                              :filter ,(lambda (command) (and (wime-raw--focused-p) command)))))
     map)
   "输入中额外的按键。字母、数字、空格走输入法，其余编辑键都是 Emacs 原本的命令。")
 

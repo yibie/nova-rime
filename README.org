@@ -105,6 +105,7 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 
 - 没把握的词（橙色；整句选了词频较低的词时是紫色）直接列出备选，全句连续编号，按数字只改这一个词，其余词不动。
 - 光标停在某个词里时只展开这个词，备选里有不同长度的词，可以重新切分；光标回到句尾恢复全句编号。
+- 光标停在多字词的某个字上时，备选先列这个字的同音单字，选它只换这一个字，词里其他字不动。
 - 打过去的多字词有把握或已经稳定就冻结，后文不再改它。选过的词（绿色）还能再改。
 - 最后一个音节没打完时，文字和词块保持不动。
 - =TAB= 切到整句列表。
@@ -120,7 +121,9 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 | =wime-tree-freeze-share= | 50 | 多字词占比达到它就冻结 |
 | =wime-tree-stable-syllables= | 2 | 之后又打了这么多音节都没变就冻结 |
 | =wime-tree-overview-alts= | 2 | 没有焦点时每个词列几个备选 |
-| =wime-tree-focus-alts= | 6 | 焦点词最多几个备选 |
+| =wime-tree-focus-alts= | 6 | 焦点词每页几个备选 |
+| =wime-tree-focus-pages= | 6 | 焦点词的备选最多几页 |
+| =wime-tree-char-alts= | 4 | 光标在多字词里时先列几个单字，0 不列 |
 | =wime-tree-labels= | 9 | 全句最多几个编号 |
 
 词块颜色是 =wime-tree-*-face=，可以用 =M-x customize-face= 改。
@@ -135,6 +138,10 @@ uvx --from huggingface-hub hf download 0WD0/wime-wanxiang wanxiang.db \
 - 回车：字母原样留下。
 - =ESC=：字母原样留下。
 - 数字：和树状候选一样改词；=TAB= 切到整句列表。
+- =↓= / =↑=：光标停在某个词上时，把它换成下一个 / 上一个备选，句子马上更新，正在用的那一项高亮；
+  一路按 =↑= 回到原来的词。光标在末尾时照常移动光标。
+- ~-~ ~=~ ~,~ ~.~、=PageUp= =PageDown=：光标停在某个词上时翻这个词的备选，页码显示在最后一项后面；
+  光标在末尾时照常出标点。
 
 开着它时不用半上屏：上屏后的汉字不带读音，事后不能按读音改。声调键 =C-1= … =C-5= 在这种方式下不起作用。
 

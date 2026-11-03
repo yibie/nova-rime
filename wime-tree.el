@@ -81,6 +81,10 @@
   '((t :foreground "#8a8a8a"))
   "备选前的分支符号。" :group 'wime)
 
+(defface wime-tree-current-face
+  '((t :background "#2f6fde" :foreground "white"))
+  "上下键换词时，句子里正在用的那一项。" :group 'wime)
+
 (defcustom wime-tree-max-block 3
   "词块最多几个字。词库有「我很喜欢」这样的短语，块太长就没有东西可选。"
   :type 'integer :group 'wime)
@@ -108,7 +112,14 @@ nil 时每打一个音节整句都可能重新解码（rime 原本的行为）�
   "没有焦点时每个词列几个备选。"
   :type 'integer :group 'wime)
 (defcustom wime-tree-focus-alts 6
-  "焦点词最多几个备选。"
+  "焦点词每页几个备选。"
+  :type 'integer :group 'wime)
+(defcustom wime-tree-focus-pages 6
+  "焦点词的备选最多翻几页。"
+  :type 'integer :group 'wime)
+(defcustom wime-tree-char-alts 4
+  "光标停在多字词的某个字上时，备选先列这个字的几个同音单字，后面才是整个词的写法。
+选单字只换这一个字，词里其他字不动。设为 0 不列单字。"
   :type 'integer :group 'wime)
 (defcustom wime-tree-same-length-alts 4
   "焦点词里同长度备选最多几个，其余位置留给别的长度（用来重新切分）。"
@@ -128,6 +139,15 @@ nil 时每打一个音节整句都可能重新解码（rime 原本的行为）�
   "上一次的完整音节数，用来判断是不是多打了一个音节。")
 (defvar-local wime-tree--focus nil
   "上一次画出时光标所在的词块序号，nil 表示没有焦点。")
+(defvar-local wime-tree--focus-syllable nil
+  "上一次画出时光标所在的音节序号。")
+(defvar-local wime-tree--page 0 "焦点词的备选翻到第几页，从 0 开始。")
+(defvar-local wime-tree--page-key nil "翻页对应的 (输入 . 焦点词起点)，变了就回到第一页。")
+(defvar-local wime-tree--pages 1 "焦点词的备选一共几页。")
+(defvar-local wime-tree--current nil "本页里句子正在用的那一项（上下键换词时），从 0 开始。")
+(defvar-local wime-tree--cycle nil
+  "上下键换词的状态，plist：:alts 第一次按键时记下的备选，:index 当前第几项（0 是原来的词），
+:pins :frozen :blocks :syllables 第一次按键前的状态，每次换词都从它出发。")
 
 ;;; 数据
 
@@ -196,6 +216,31 @@ nil 时每打一个音节整句都可能重新解码（rime 原本的行为）�
       (cl-loop for other from (1+ length) to wime-tree-max-block do (add other 1))
       (add length limit))
     (nreverse result)))
+
+(defun wime-tree--focus-list (block units syllable)
+  "焦点词的全部备选。光标 SYLLABLE 在多字词里时，先放这个字的几个同音单字，
+再放整个词的写法，剩下的单字排在后面。单字项带第四个元素 (START END TEXT)，
+是它所在的词，选它时词里其他字原样冻结。"
+  (let* ((limit (* wime-tree-focus-alts wime-tree-focus-pages))
+         (start (wime-tree-block-start block))
+         (end (wime-tree-block-end block))
+         (text (wime-tree-block-text block))
+         (whole (wime-tree--alternatives block units limit wime-tree-same-length-alts))
+         (split (and syllable (> wime-tree-char-alts 0) (> (- end start) 1)
+                     (<= start syllable) (< syllable end)
+                     (list start end text)))
+         (current (and split (char-to-string (aref text (- syllable start)))))
+         (chars (and split
+                     (cl-loop for (word . _) in (wime-tree--weights units syllable 1)
+                              unless (equal word current)
+                              collect (list syllable (1+ syllable) word split)))))
+    (if (not chars)
+        whole
+      (let* ((first (min wime-tree-char-alts (length chars)))
+             (words (max 0 (- wime-tree-focus-alts first))))
+        (seq-take (append (seq-take chars first) (seq-take whole words)
+                          (nthcdr first chars) (nthcdr words whole))
+                  limit)))))
 
 (defun wime-tree--build (text units)
   "把 TEXT 切成词块，算出比例、是否被纠正、是否用户选过、稳定了几个音节。"
@@ -267,17 +312,72 @@ nil 时每打一个音节整句都可能重新解码（rime 原本的行为）�
       (append wime--pins (wime-tree--soft-pins (wime--parse input)))
     wime--pins))
 
-(defun wime-tree--choose-span (start end)
-  "选词时其余词块全部冻结，只重新解码和所选范围重叠的部分。"
+(defun wime-tree--freeze-span (start end text units)
+  (when (< start end)
+    (setq wime-tree--frozen
+          (cons (list start end text (wime-tree--keys units start end))
+                (seq-remove (lambda (f) (= (car f) start)) wime-tree--frozen)))))
+
+(defun wime-tree--choose-span (start end &optional split)
+  "选词时其余词块全部冻结，只重新解码和所选范围重叠的部分。
+SPLIT 是 (START END TEXT)：只换了这个词里的一个字，词里其他字也冻结。"
   (setq wime-tree--frozen
         (seq-remove (lambda (f) (and (< (car f) end) (> (nth 1 f) start))) wime-tree--frozen))
   (dolist (block wime-tree--blocks)
     (when (or (<= (wime-tree-block-end block) start) (>= (wime-tree-block-start block) end))
-      (wime-tree--freeze block))))
+      (wime-tree--freeze block)))
+  (pcase split
+    (`(,word-start ,word-end ,text)
+     (let ((units (wime-tree--units)))
+       (when (<= word-end (length units))
+         (wime-tree--freeze-span word-start start (substring text 0 (- start word-start)) units)
+         (wime-tree--freeze-span end word-end (substring text (- end word-start)) units))))))
 
 (defun wime-tree--reset ()
   (setq wime-tree--blocks nil wime-tree--frozen nil
-        wime-tree--syllables 0 wime-tree--focus nil))
+        wime-tree--syllables 0 wime-tree--focus nil wime-tree--focus-syllable nil
+        wime-tree--page 0 wime-tree--page-key nil wime-tree--cycle nil))
+
+;;; 上下键换词
+
+(defun wime-tree--snapshot ()
+  (list :pins wime--pins :frozen wime-tree--frozen
+        :blocks wime-tree--blocks :syllables wime-tree--syllables))
+
+(defun wime-tree--restore (state)
+  (setq wime--pins (plist-get state :pins)
+        wime-tree--frozen (plist-get state :frozen)
+        wime-tree--blocks (plist-get state :blocks)
+        wime-tree--syllables (plist-get state :syllables)))
+
+(defun wime-tree--cycle-step (delta)
+  "换到焦点词的下一项（DELTA 为 1）或上一项（-1）。
+第一次按时记下备选和当前状态，之后每次都从这个状态出发，所以一路按回去能回到原来的词。
+返回要套用的备选；回到原来的词时返回 t；到头了返回 nil。"
+  (unless wime-tree--cycle
+    (when-let* ((focus wime-tree--focus)
+                (block (nth focus wime-tree--blocks))
+                (alts (wime-tree--focus-list block (wime-tree--units) wime-tree--focus-syllable)))
+      (setq wime-tree--cycle (append (list :alts alts :index 0) (wime-tree--snapshot)))))
+  (when wime-tree--cycle
+    (let* ((alts (plist-get wime-tree--cycle :alts))
+           (index (+ (plist-get wime-tree--cycle :index) delta)))
+      (when (and (>= index 0) (<= index (length alts)))
+        (setq wime-tree--cycle (plist-put wime-tree--cycle :index index))
+        (wime-tree--restore wime-tree--cycle)
+        (if (= index 0) t (nth (1- index) alts))))))
+
+(defun wime-tree--cycle-restore ()
+  "上下键换词中按数字：先回到换词前的状态，再按编号选。"
+  (when wime-tree--cycle
+    (wime-tree--restore wime-tree--cycle)))
+
+(defun wime-tree--turn-page (delta)
+  "焦点词的备选翻页。翻不动时返回 nil。"
+  (let ((page (+ wime-tree--page delta)))
+    (when (and wime-tree--focus (>= page 0) (< page wime-tree--pages))
+      (setq wime-tree--page page wime-tree--cycle nil)
+      t)))
 
 ;;; 半个音节
 
@@ -312,7 +412,8 @@ wime 原本会逐字重新猜。"
 
 (defun wime-tree--focus-index (blocks)
   "光标所在音节所在的词块。"
-  (when-let* ((syllable (funcall wime-tree--focus-syllable-function)))
+  (when-let* ((syllable (setq wime-tree--focus-syllable
+                              (funcall wime-tree--focus-syllable-function))))
     (cl-position-if (lambda (b) (and (<= (wime-tree-block-start b) syllable)
                                      (< syllable (wime-tree-block-end b))))
                     blocks)))
@@ -320,10 +421,29 @@ wime 原本会逐字重新猜。"
 (defun wime-tree--assign (blocks units focus)
   "给要显示备选的块填上 alts，并按编号顺序设置 `wime--span-choices'。"
   (dolist (block blocks) (setf (wime-tree-block-alts block) nil))
+  (setq wime-tree--pages 1 wime-tree--current nil)
   (if focus
-      (setf (wime-tree-block-alts (nth focus blocks))
-            (wime-tree--alternatives (nth focus blocks) units wime-tree-focus-alts
-                                          wime-tree-same-length-alts))
+      (let* ((block (nth focus blocks))
+             (cycle wime-tree--cycle)
+             (index (and cycle (plist-get cycle :index)))
+             (all (if cycle
+                      (plist-get cycle :alts)
+                    (wime-tree--focus-list block units wime-tree--focus-syllable)))
+             (per (max 1 wime-tree-focus-alts))
+             (key (cons wime--input (wime-tree-block-start block))))
+        (setq wime-tree--pages (max 1 (ceiling (length all) (float per))))
+        (cond
+         ;; 换词时翻到正在用的那一项所在的页。
+         ((and cycle (> index 0))
+          (setq wime-tree--page (/ (1- index) per)
+                wime-tree--current (% (1- index) per)))
+         (cycle)
+         ((not (equal key wime-tree--page-key))
+          (setq wime-tree--page 0)))
+        (setq wime-tree--page-key key
+              wime-tree--page (min wime-tree--page (1- wime-tree--pages)))
+        (setf (wime-tree-block-alts block)
+              (seq-take (nthcdr (* wime-tree--page per) all) per)))
     ;; 编号不够时最不确定的先拿，每块要么全有要么没有。
     (let ((labels 0))
       (dolist (block (sort (pcase wime-tree-overview
@@ -376,12 +496,21 @@ wime 原本会逐字重新猜。"
              (let* ((chip (propertize (concat " " (wime-tree-block-text block) " ")
                                       'face (wime-tree--face block (eql i focus))))
                     (width (wime-edit--display-width chip window))
-                    (cells (mapcar (lambda (alt)
-                                     (concat branch
-                                             (propertize (number-to-string (% (cl-incf label) 10))
-                                                         'face 'wime-label-face)
-                                             (propertize (nth 2 alt) 'face 'wime-alternatives-face)))
-                                   (wime-tree-block-alts block))))
+                    (focused (eql i focus))
+                    (cells (cl-loop for alt in (wime-tree-block-alts block) for j from 0
+                                    collect
+                                    (concat branch
+                                            (propertize (number-to-string (% (cl-incf label) 10))
+                                                        'face 'wime-label-face)
+                                            (propertize (nth 2 alt) 'face
+                                                        (if (and focused (eql j wime-tree--current))
+                                                            'wime-tree-current-face
+                                                          'wime-alternatives-face))))))
+               (when (and focused cells (> wime-tree--pages 1))
+                 (setcar (last cells)
+                         (concat (car (last cells))
+                                 (propertize (format " ‹ %d/%d ›" (1+ wime-tree--page) wime-tree--pages)
+                                             'face 'wime-tree-branch-face))))
                (when (and chunk (> (+ x width) limit))
                  (push (nreverse chunk) chunks)
                  (setq chunk nil x 0 floor 0))
