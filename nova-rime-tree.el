@@ -319,19 +319,20 @@ nil 时每打一个音节整句都可能重新解码（rime 原本的行为）�
                 (seq-remove (lambda (f) (= (car f) start)) nova-rime-tree--frozen)))))
 
 (defun nova-rime-tree--choose-span (start end &optional split)
-  "选词时其余词块全部冻结，只重新解码和所选范围重叠的部分。
-SPLIT 是 (START END TEXT)：只换了这个词里的一个字，词里其他字也冻结。"
+  "选词时只冻结所选范围之前的词块；之后的部分带着新选的字重新解码。
+改了前面的字，后面的字可以跟它重新组词：显 + 时期 变成 显示器。
+用户亲手选过的字在 `nova-rime--pins' 里，不管在前在后都保留。
+SPLIT 是 (START END TEXT)：只换了这个词里的一个字，词里在它前面的字也冻结。"
   (setq nova-rime-tree--frozen
-        (seq-remove (lambda (f) (and (< (car f) end) (> (nth 1 f) start))) nova-rime-tree--frozen))
+        (seq-remove (lambda (f) (> (nth 1 f) start)) nova-rime-tree--frozen))
   (dolist (block nova-rime-tree--blocks)
-    (when (or (<= (nova-rime-tree-block-end block) start) (>= (nova-rime-tree-block-start block) end))
+    (when (<= (nova-rime-tree-block-end block) start)
       (nova-rime-tree--freeze block)))
   (pcase split
-    (`(,word-start ,word-end ,text)
+    (`(,word-start ,_word-end ,text)
      (let ((units (nova-rime-tree--units)))
-       (when (<= word-end (length units))
-         (nova-rime-tree--freeze-span word-start start (substring text 0 (- start word-start)) units)
-         (nova-rime-tree--freeze-span end word-end (substring text (- end word-start)) units))))))
+       (when (<= start (length units))
+         (nova-rime-tree--freeze-span word-start start (substring text 0 (- start word-start)) units))))))
 
 (defun nova-rime-tree--reset ()
   (setq nova-rime-tree--blocks nil nova-rime-tree--frozen nil

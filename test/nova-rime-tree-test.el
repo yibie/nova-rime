@@ -105,6 +105,35 @@ syllable; picking one changes 好 alone and keeps 你."
         (nova-rime-edit-test--type " ")
         (should (equal (buffer-string) "甲丁"))))))
 
+(ert-deftest nova-rime-raw-fixing-a-word-regroups-the-words-after-it ()
+  "Picking 乙 for the first syllable lets 丙戊 after it become 乙丁己:
+freezing only holds the words before the choice."
+  (let ((nova-rime-raw-input t)
+        (nova-rime-edit-test--dictionary
+         (append '(("bbcc" ("丙戊" "c/e" 1000000))
+                   ("aabbcc" ("乙丁己" "b/d/f" 95000000)))
+                 nova-rime-edit-test--dictionary)))
+    (nova-rime-edit-test--buffer
+      (nova-rime-edit-test--type "aabbcc")
+      (should (equal (mapcar #'nova-rime-tree-block-text nova-rime-tree--blocks) '("甲" "丙戊")))
+      (nova-rime-raw--apply (list 0 1 "乙"))
+      (should (equal (car nova-rime--candidates) "乙丁己"))
+      (nova-rime-edit-test--type " ")
+      (should (equal (buffer-string) "乙丁己")))))
+
+(ert-deftest nova-rime-raw-fixing-a-word-keeps-the-words-before-it ()
+  "Picking 丁 for the last syllable leaves 甲 before it alone, even though
+乙丁 would score higher as a whole."
+  (let ((nova-rime-raw-input t)
+        (nova-rime-edit-test--dictionary
+         (append '(("aabb" ("乙丁" "b/d" 9500)))
+                 nova-rime-edit-test--dictionary)))
+    (nova-rime-edit-test--buffer
+      (nova-rime-edit-test--type "aabb")
+      (should (equal (car nova-rime--candidates) "甲丙"))
+      (nova-rime-raw--apply (list 1 2 "丁"))
+      (should (equal (car nova-rime--candidates) "甲丁")))))
+
 (ert-deftest nova-rime-raw-up-and-down-cycle-the-focused-word ()
   "Down replaces the focused word at once; up walks back to the original."
   (let ((nova-rime-raw-input t))
