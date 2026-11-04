@@ -303,8 +303,9 @@
 (defun nova-rime-raw--commit-text (text &optional rest)
   "把输入换成 TEXT 上屏，nova-rime 照常记录和学习；REST 是留下来继续输入的字母。"
   (let ((start (marker-position nova-rime-raw--start)))
-    (let ((inhibit-modification-hooks t))
-      (delete-region nova-rime-raw--start nova-rime-raw--end))
+    ;; 删除要让修改钩子照常运行：Org 的 element 缓存靠它们跟踪位置，
+    ;; 瞒过它们会让缓存错位，之后 `org-element-at-point' 可能死循环。
+    (delete-region nova-rime-raw--start nova-rime-raw--end)
     (goto-char start)
     (nova-rime-raw--clear-display)
     (nova-rime--commit text)

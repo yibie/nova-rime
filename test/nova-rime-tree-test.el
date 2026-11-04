@@ -60,6 +60,21 @@
       (nova-rime-edit-test--type " ")
       (should (equal (buffer-string) "甲丙")))))
 
+(ert-deftest nova-rime-raw-commit-reports-the-deletion-to-change-hooks ()
+  "Replacing the letters runs change hooks, so caches such as Org's element
+cache follow the edit.  Hiding the deletion left Org's cache stale and later
+hung `org-element-at-point'."
+  (let ((nova-rime-raw-input t) (changes nil))
+    (nova-rime-edit-test--buffer
+      (insert "x")
+      (add-hook 'before-change-functions
+                (lambda (start end) (push (list start end) changes)) nil t)
+      (nova-rime-edit-test--type "aabb")
+      (setq changes nil)
+      (nova-rime-edit-test--type " ")
+      (should (equal (buffer-string) "x甲丙"))
+      (should (member '(2 6) changes)))))
+
 (ert-deftest nova-rime-raw-digit-fixes-a-word ()
   (let ((nova-rime-raw-input t))
     (nova-rime-edit-test--buffer
