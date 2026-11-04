@@ -1432,6 +1432,19 @@ commits its selected candidate first."
   (remove-hook 'nova-rime-reset-hook #'nova-rime-raw--reset t)
   (kill-local-variable 'input-method-function))
 
+(defun nova-rime--minibuffer-inherit-english ()
+  "Carry the opening buffer's English state into an inherited minibuffer.
+`nova-rime-english-mode' is buffer-local, and activation in the fresh
+minibuffer starts in Chinese.  Only entering the minibuffer inherits the
+state: \\[nova-rime-toggle-english] pressed later inside it still starts
+in Chinese."
+  (when-let* (((equal current-input-method "nova-rime"))
+              (window (minibuffer-selected-window))
+              ((buffer-local-value 'nova-rime-english-mode (window-buffer window))))
+    (nova-rime-english-mode 1)))
+
+(add-hook 'minibuffer-setup-hook #'nova-rime--minibuffer-inherit-english)
+
 (defun nova-rime-setup ()
   "Install nova-rime as the default input method."
   (setq default-input-method "nova-rime"))

@@ -377,6 +377,30 @@
       (should (equal (buffer-string) selected))
       (should-not (nova-rime--active-p)))))
 
+(ert-deftest nova-rime-minibuffer-inherits-english-state ()
+  (let ((origin (generate-new-buffer " *origin*"))
+        (window (selected-window))
+        (previous (window-buffer (selected-window))))
+    (unwind-protect
+        (progn
+          (with-current-buffer origin
+            (activate-input-method "nova-rime")
+            (nova-rime-english-mode 1))
+          (set-window-buffer window origin)
+          (cl-letf (((symbol-function 'minibuffer-selected-window) (lambda () window)))
+            (with-temp-buffer
+              (activate-input-method "nova-rime")
+              (should-not nova-rime-english-mode)
+              (nova-rime--minibuffer-inherit-english)
+              (should nova-rime-english-mode))
+            (with-current-buffer origin (nova-rime-english-mode -1))
+            (with-temp-buffer
+              (activate-input-method "nova-rime")
+              (nova-rime--minibuffer-inherit-english)
+              (should-not nova-rime-english-mode))))
+      (set-window-buffer window previous)
+      (kill-buffer origin))))
+
 (ert-deftest nova-rime-parse-keeps-typed-order ()
   (should (equal (nova-rime--parse "yrZt") '(("yr" . "Z") ("t" . ""))))
   (should (equal (nova-rime--parse "nihk") '(("ni" . "") ("hk" . ""))))
